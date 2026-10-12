@@ -866,8 +866,12 @@ luma cannot mask) the colour error lands in one hard stripe one or two pixels wi
 scaler (720 -> 1920 is 2.67x) widens it into bands. The H264 core measured exactly this on its rig
 in Native (its `display.md` §3 "Chroma at the identity", history §43: the raster matched a nearest
 model on 99.99 % of a red test pattern, an interpolating player's on 77 %, up to 108 codes apart)
-and fixed it the same way; nearest had come to it with the display from UMD / DVD, never weighed
-as a quality choice. Asked by the maintainer 2026-10-12 ("go straight to the horizontal +
+and fixed it the same way; nearest had come to it with the display from UMD (its notes say "UMD /
+DVD": not so -- UMD's reader grew from its own P4 smoke display and never took MiSTer_DVD's output
+stage, whose `resample_bilinear` has always interpolated both ways, per field on interlaced pictures,
+its row choice fixed in MiSTer_DVD PR #142), never weighed as a quality choice. DVD's design is also
+the reference for the limitation below: within-field vertical chroma there costs a two-row chroma
+cache per plane. Asked by the maintainer 2026-10-12 ("go straight to the horizontal +
 frame-vertical step"); not measured on UMD's rig before the change.
 
 **The siting is H.264's default, type 0, fixed -- measured, not assumed.** Every one of the
