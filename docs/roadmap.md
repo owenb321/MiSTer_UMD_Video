@@ -98,6 +98,15 @@
     16:9 titles unzoomed, errors 0.
   - ✅ The maintainer's own test on .236 passed (2026-10-09). ✅ MERGED (PR fj#83).
 
+- **Chroma interpolated, not nearest (2026-10-12): 🔧 built on `feature/chroma-interp`, ✅ HW-CONFIRMED (.201)**
+  (`docs/display.md` §12, `CORE_VERSION` `dev-chroma`): the H264 core's "chroma at the identity" ported -- an odd
+  column `(c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1` at 480p and 480i Fit / Letterbox, a 480p frame store vertically
+  `(3 h[m] + h[m -+ 1] + 2) >> 2`; field stores stay nearest vertically, Crop and the window unchanged. The siting
+  fixed at type 0 (0 of 691 clips declare one: `spec_hardening.md`). `run_disp_reader.sh` GREEN + `--red` Z1-Z11
+  (K9 / K10's dead anchors fixed); plane / overlay / zoom / scaffold green. Fit SEED 5 PASS 87.31 / 89.20, 40,926
+  ALM (ALUTs -41), `UMD_chroma_20261012_0529.rbf`. ✅ On .201: six paused pictures (Akira's frames, Family Guy's
+  field pairs) equal the golden on every pixel outside the pause glyph, nearest off by 50-110K pixels each
+  (`display.md` §12, `tools/chroma_shot_check.py`). **Next:** merge (on request); 480i on the CRT not looked at.
 - **Hard-telecined film, field matching (Forgejo fj#80, 2026-10-08/09): ✅ MERGED (PR fj#82), ✅ HW-CONFIRMED**
   (`docs/telecine.md`). 15 main titles are film coded as 59.94
   field pairs with the 3:2 baked in; Weave combs 2 pairs in 5 there.

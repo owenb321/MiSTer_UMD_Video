@@ -11,8 +11,10 @@
 # held (no write during reads, no read inside an open write burst), B served while A is
 # busy, both aborts clean; disp_reader_tb on every deinterlace variant (P5f), each dot
 # {de, R, G, B} against tools/disp_golden.py, LAT 4: [rgb] a frame (the BT.601 conversion
-# of the store's samples); [field] the same store as a field pair, woven (ffmpeg
-# separatefields: each line's chroma from its own field); [pass] the frame in Bob and in
+# of the store's samples, chroma interpolated both ways -- docs/display.md S12); [field] the
+# same store as a field pair, woven (ffmpeg separatefields: each line's chroma from its own
+# field, interpolated along the line); [il] the 480i frame arms want disp_want_frame_il (rows
+# nearest); [pass] the frame in Bob and in
 # Blend (untouched); [blend] the pair in Blend (ffmpeg's interlace lowpass) at 720x480,
 # 480x272 (the bottom mirror inside the raster) and 720x576 (clipped: line 479's d is the
 # real line 480); [bob] the pair in Bob keeping either field, at 720x480 and 480x272 (the
@@ -98,6 +100,20 @@
 #   W10 the window's columns not bounded (the picture beside it)     -> [win]
 #   W11 a rectangle off the raster not refused                        -> [win] (bad)
 #   (win_hold -- no latch during a HOST_WR -- is the host port's: run_umd_host.sh H19)
+#   chroma interpolated (docs/display.md S12; the golden's hup / up_h / up_ident, the frame's checked
+#   against ffmpeg's in_chroma_loc=left upsampling):
+#   Z1  the odd / even column swapped                                 -> [rgb]
+#   Z2  row a's horizontal rounding dropped                           -> [blend]
+#   Z3  the vertical neighbour's rows swapped (2m takes d)            -> [rgb]
+#   Z4  the vertical step on a field store                            -> [field]
+#   Z5  the right edge not replicated (rows b / d)                    -> [rgb]
+#   Z6  no interpolation (nearest)                                    -> [rgb]
+#   Z7  row a's ahead read not clamped (the right edge)               -> [blend]
+#   Z8  row a's left tap its own read (not the previous dot's)        -> [blend]
+#   Z9  480i not interpolated                                         -> [il]
+#   Z10 Crop interpolated too (its own taps)                          -> [crop]
+#   Z11 the window interpolated too (its own taps)                    -> [win] (the upscale: the half
+#       window's weight is 8 on every column, its chroma pairs equal -- it cannot see this)
 #   C1  se_cdc: a pop while a word is in flight (the guard dropped)  -> [order]
 #   C2  se_cdc: pop only into an empty register (no pop on take)     -> [rate]
 set -u
@@ -158,9 +174,9 @@ DISP_ARMS=(
   "disp_bob_s1|+arm=bob +small +field +mode=1 +parity=1 +want=$G/disp_want_s_bob1.hex"
   "disp_single_w|+arm=single +field +single +mode=0 +parity=1 +want=$G/disp_want_bob1.hex"
   "disp_single_l|+arm=single +small +field +single +mode=2 +parity=0 +want=$G/disp_want_s_bob0.hex"
-  "disp_il|+arm=il +il"
+  "disp_il|+arm=il +il +want=$G/disp_want_frame_il.hex"
   "disp_il_field|+arm=il +il +field +mode=2 +want=$G/disp_want_field.hex"
-  "disp_il_still_frame|+arm=il +il +still +mode=1"
+  "disp_il_still_frame|+arm=il +il +still +mode=1 +want=$G/disp_want_frame_il.hex"
   "disp_il_single0|+arm=ilsingle +il +field +single +parity=0 +want=$G/disp_want_bob0.hex"
   "disp_il_single1|+arm=ilsingle +il +field +single +parity=1 +want=$G/disp_want_bob1.hex"
   "disp_il_single_s0|+arm=ilsingle +il +small +field +single +parity=0 +want=$G/disp_want_s_bob0.hex"
@@ -248,10 +264,10 @@ PYEOF
   mut K6 $D "last ? v_pos[1:0] - 2'd1 : v_pos[1:0] + 2'd1;" "v_pos[1:0] + 2'd1;" $DT "blend" "umd/sync_gen.sv $MODEL" "+arm=blend +small +field +mode=2 +want=$G/disp_want_s_blend.hex" &
   mut K7 $D "else if (v_pos < 12'd479) begin" "else if (v_pos < 12'd478) begin" $DT "blend" "umd/sync_gen.sv $MODEL" "+arm=blend +tall +field +mode=2 +want=$G/disp_want_t_blend.hex" &
   mut K8 $D "                        !pic_field ? 2'd0 :" "                        1'b0 ? 2'd0 :" $DT "pass" "umd/sync_gen.sv $MODEL" "+arm=pass +mode=2 +parity=1" &
-  mut K9 $D "wire         bob  = pic_field && (pic_single || k_mode == 2'd1);" "wire         bob  = pic_field && (k_mode == 2'd1);" $DT "single" "umd/sync_gen.sv $MODEL" "+arm=single +field +single +mode=0 +parity=1 +want=$G/disp_want_bob1.hex" &
-  mut K10 $D "req_tog <= !req_tog; k_mode <= deint_mode; end" "req_tog <= !req_tog; k_mode <= 2'd0; end" $DT "blend" "umd/sync_gen.sv $MODEL" "$BL" &
+  mut K9 $D "(pic_single || pic_film == 2'd2 || (k_mode == 2'd1 && !film_w))" "(pic_film == 2'd2 || (k_mode == 2'd1 && !film_w))" $DT "single" "umd/sync_gen.sv $MODEL" "+arm=single +field +single +mode=0 +parity=1 +want=$G/disp_want_bob1.hex" &
+  mut K10 $D "req_tog <= !req_tog; k_mode <= deint_mode;" "req_tog <= !req_tog; k_mode <= 2'd0;" $DT "blend" "umd/sync_gen.sv $MODEL" "$BL" &
   # 480i (docs/analog.md)
-  mut I1 $D "wire  [9:0]  x = il ? h_pos[10:1] : h_pos[9:0];" "wire  [9:0]  x = h_pos[9:0];" $DT "il" "umd/sync_gen.sv $MODEL" "+arm=il +il" &
+  mut I1 $D "wire  [9:0]  x = il ? h_pos[10:1] : h_pos[9:0];" "wire  [9:0]  x = h_pos[9:0];" $DT "il" "umd/sync_gen.sv $MODEL" "+arm=il +il +want=$G/disp_want_frame_il.hex" &
   mut I2 $D "wire  [7:0]  yk = two ? iy :" "wire  [7:0]  yk = 1'b0 ? iy :" $DT "ilstill" "umd/sync_gen.sv $MODEL" "+arm=ilstill +il +field +still +mode=2 +parity=1 +want=$G/disp_want_bob1.hex" &
   mut I3 $D "2'b10:   begin s0_s = 11'sd0;  s0_r = 3'd3; end" "2'b10:   begin s0_s = 11'sd0;  s0_r = 3'd0; end" $DT "ilsingle" "umd/sync_gen.sv $MODEL" "+arm=ilsingle +il +field +single +parity=0 +want=$G/disp_want_bob0.hex" &
   mut I4 $D "wire  [2:0]  v_k    = (v_neg || v_s0 >= {1'b0, w_last}) ? 3'd0 : v_r;" "wire  [2:0]  v_k    = (v_s0 >= {1'b0, w_last}) ? 3'd0 : v_r;" $DT "ilsingle" "umd/sync_gen.sv $MODEL" "+arm=ilsingle +il +field +single +parity=1 +want=$G/disp_want_bob1.hex" &
@@ -268,7 +284,7 @@ PYEOF
   mut A5 $D "if (w_j == 9'd30)" "if (w_j == 9'd29)" $DT "lb" "umd/sync_gen.sv $MODEL" "$LBA" &
   wait
   mut A6 $D "wire  [11:0] xq   = 12'd360 +" "wire  [11:0] xq   = 12'd364 +" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
-  mut A7 $D "(s1_f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd8;" "(s1_f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd0;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
+  mut A7 $D "(f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd8;" "(f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd0;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
   mut A8 $D "ub1 = !s1_t0o ? ub : (s1_c0o ? ub_e : ub_o);" "ub1 = ub;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
   mut A9 $D "(pic_w_mbs == 8'd45 && pic_hf_mbs == 8'd30 && aa_mode != 2'd3)" "(aa_mode != 2'd3)" $DT "lb" "umd/sync_gen.sv $MODEL" "+arm=lb +il +aa=1 +small +field +single +parity=0 +want=$G/disp_want_s_bob0.hex" &
   mut A10 $D "wire  [9:0]  t_e  = t0 + {9'd0, t0[0]};" "wire  [9:0]  t_e  = t0;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
@@ -306,6 +322,20 @@ PYEOF
   mut W9 $D "wire  [9:0]  st_s1  = fw_fld ? {wn_s1[8:0], fw_kp} : wn_s1;" "wire  [9:0]  st_s1  = fw_fld ? {wn_s1[8:0], fw_kp} : {1'b0, wn_s1[8:0]};" $DT "win" "umd/sync_gen.sv $MODEL" "$(wa tall +tall)" &
   mut W10 $D "(fw_on ? (wx_in && cur_wi) :" "(fw_on ? (cur_wi) :" $DT "win" "umd/sync_gen.sv $MODEL" "$(wa half)" &
   mut W11 $D "wire         w_ok    = (win_w != 10'd0) && (win_h != 10'd0) && (wxe <= 11'd720) && (wye <= 11'd480);" "wire         w_ok    = 1'b1;" $DT "win" "umd/sync_gen.sv $MODEL" "$(wa bad)" &
+  wait
+  # chroma interpolated (docs/display.md S12)
+  mut Z1 $D "wire         ch_x = ch_h && x[0] &&" "wire         ch_x = ch_h && !x[0] &&" $DT "rgb" "umd/sync_gen.sv $MODEL" &
+  mut Z2 $D "{1'b0, p_ua} + {1'b0, ua} + 9'd1" "{1'b0, p_ua} + {1'b0, ua} + 9'd0" $DT "blend" "umd/sync_gen.sv $MODEL" "$BL" &
+  mut Z3 $D "wire  [1:0]  bk_dc = (ch_v && !v_pos[0]) ? bk_a : bk_d;" "wire  [1:0]  bk_dc = (ch_v && v_pos[0]) ? bk_a : bk_d;" $DT "rgb" "umd/sync_gen.sv $MODEL" &
+  mut Z4 $D "wire         ch_v = !il && !fw_on && !pic_field;" "wire         ch_v = !il && !fw_on;" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  mut Z5 $D "x[0] && ({2'd0, x} + 12'd1 < {pic_w_mbs, 4'd0});" "x[0];" $DT "rgb" "umd/sync_gen.sv $MODEL" &
+  mut Z6 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = 1'b0;" $DT "rgb" "umd/sync_gen.sv $MODEL" &
+  wait
+  mut Z7 $D "wire  [8:0]  ca   = (ca_u > ca_l) ? ca_l[8:0] : ca_u[8:0];" "wire  [8:0]  ca   = ca_u[8:0];" $DT "blend" "umd/sync_gen.sv $MODEL" "$BL" &
+  mut Z8 $D "{1'b0, p_ua} + {1'b0, ua} + 9'd1" "{1'b0, ua} + {1'b0, ua} + 9'd1" $DT "blend" "umd/sync_gen.sv $MODEL" "$BL" &
+  mut Z9 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !fw_on && !crop && !il;" $DT "il" "umd/sync_gen.sv $MODEL" "+arm=il +il +want=$G/disp_want_frame_il.hex" &
+  mut Z10 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !fw_on;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
+  mut Z11 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !crop;" $DT "win" "umd/sync_gen.sv $MODEL" "$(wa up +small)" &
   wait
   C=umd/se_cdc.sv; CT=bench/umd/se_cdc_tb.sv
   mut C1 $C "assign f_rd = !f_empty && !pend && (!out_valid || take);" "assign f_rd = !f_empty && (!out_valid || take);" $CT "order" "umd/fifo_dc.sv" &

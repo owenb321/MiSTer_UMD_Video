@@ -72,6 +72,13 @@ Many discs carry an occasional time stamp that disagrees with the pictures aroun
 time stamp like this and keeps the picture's normal timing, so playback runs smoothly
 through it.
 
+Colour is stored at half the picture's resolution, as in all H.264 video. The core blends
+it smoothly between the stored samples at the standard position (every UMD Video disc uses
+it). A stream that declares another position (none has been found) shows its colour half a
+pixel off. On interlaced pictures and on the 480i output the colour is blended only along
+each line. Under **Crop** in [Analog Aspect](../playback/settings.md) and inside a disc
+menu's video window it is shown as stored.
+
 ## Audio
 
 ATRAC3plus, stereo, 48 kHz, as on every surveyed disc (four bitrates are in

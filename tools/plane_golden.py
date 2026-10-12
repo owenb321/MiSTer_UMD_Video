@@ -65,6 +65,12 @@ with open(os.path.join(OUT, "disp_rgb.hex")) as f:
     v = np.array([int(x, 16) for x in f.read().split()], dtype=np.int64)
 assert v.size == W * H, "disp_rgb.hex: run tools/disp_golden.py first"
 video = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).reshape(H, W, 3)
+# the same frame at 480i (disp_rgb_il.hex: its chroma rows nearest, docs/display.md S12): the
+# composite under plane_tb +il
+with open(os.path.join(OUT, "disp_rgb_il.hex")) as f:
+    v = np.array([int(x, 16) for x in f.read().split()], dtype=np.int64)
+assert v.size == W * H, "disp_rgb_il.hex: run tools/disp_golden.py first"
+video_il = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).reshape(H, W, 3)
 
 
 # ---- the fixed-point plane (docs/compositor.md §2) ---------------------------------------------
@@ -209,6 +215,8 @@ for k, (bsel, vis, x, y, w, h) in enumerate(SUB_REQS):
         check("sub %d blend vs PIL alpha_composite" % k, comp, pil.astype(np.float64), 1, np.s_[:])
     write_hex("plane_s%d_argb.hex" % k, pack(plane[..., [0, 1, 2, 3]]).reshape(-1), 8)
     write_hex("plane_s%d_rgb.hex" % k, ((comp[..., 0] << 16) | (comp[..., 1] << 8) | comp[..., 2]).reshape(-1), 6)
+    ci = blend(plane, video_il)
+    write_hex("plane_s%d_rgb_il.hex" % k, ((ci[..., 0] << 16) | (ci[..., 1] << 8) | ci[..., 2]).reshape(-1), 6)
     c = cl if cl else (0, 0, 0, 0)
     sub_lines.append("%d %d %d %d %d %d  %d %d %d %d %d" % (bsel, vis, x, y, w, h, 1 if cl else 0, *c))
 with open(os.path.join(OUT, "plane_sub.txt"), "w") as f:

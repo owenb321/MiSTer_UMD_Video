@@ -407,6 +407,12 @@
 #     (98 %) -- NOT +1,230 of logic: combinational ALUTs 62,131 -> 62,339 (+208), registers +7, ALMs placed [A]
 #     41,202 -> 41,107; the fitter's "recoverable by dense packing" estimate fell 2,096 -> 786 (main refitted at
 #     SEED 5 reproduces 39,718; docs/zoom.md S6.1). RAM 503, DSP 92. UMD_zoom_20261009_2050.rbf, clean tree.
+#   2026-10-12 (feature/chroma-interp, e8512e9, dev-chroma: chroma interpolated, not nearest -- disp_reader's
+#     horizontal blend on rows a / b / d, the frame's vertical step; docs/display.md S12): at the pinned SEED 5
+#     PASS clk_dec 87.31/89.20, clk_mem 95.03/96.24, no negative slack on a core clock (pll_hdmi only). ALM 40,926
+#     (98 %, the packing estimate) -- combinational ALUTs 62,339 -> 62,298 (-41: Crop's DR_HB reused), registers
+#     51,712. RAM 503, DSP 92 (unchanged). UMD_chroma_20261012_0529.rbf, clean tree. clk_dec's 1.31 MHz margin
+#     at 100 C is under A2's 1.5 but the fit passes: no sweep (the maintainer's rule).
 
 set_global_assignment -name TOP_LEVEL_ENTITY sys_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0

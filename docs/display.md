@@ -48,7 +48,8 @@ stores at word `0x0600_0000 + store << 17` exactly as the decoder writes them.
 Born as the P4 smoke display (`h264_recon.md` §4): at the first dot of each raster line
 it requests the next line (a toggle + line number to clk_mem), clk_mem fetches the luma
 row (2W words) and the two chroma rows (W words each) in bursts of <= 8 into dual-clock
-line buffers, and the clk_sys side converts BT.601 limited range to RGB, LAT 4.
+line buffers, and the clk_sys side converts BT.601 limited range to RGB, LAT 4. Chroma is
+interpolated, not repeated, since 2026-10-12 (§12).
 
 **Field-aware chroma (P5a).** A store of fields holds them line-interleaved in every
 plane (`h264_recon.md` §2.2): luma line y is field (y & 1)'s line y >> 1, chroma row c
@@ -856,3 +857,101 @@ so the last GOP (up to ~2 s) plays out before the title ends, rather than showin
 picture alone. A plain SEEK to the end (a chapter mark at or past OUT, a menu's play past OUT)
 takes the skip and now shows the last picture.
 
+
+## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ HW-CONFIRMED (.201)
+
+**Why.** The reader showed 4:2:0 chroma NEAREST: each chroma sample repeated over its 2 x 2 luma
+block. Beside saturated detail (red above all: the largest chroma excursion at a low luma, which
+luma cannot mask) the colour error lands in one hard stripe one or two pixels wide, and the HDMI
+scaler (720 -> 1920 is 2.67x) widens it into bands. The H264 core measured exactly this on its rig
+in Native (its `display.md` §3 "Chroma at the identity", history §43: the raster matched a nearest
+model on 99.99 % of a red test pattern, an interpolating player's on 77 %, up to 108 codes apart)
+and fixed it the same way; nearest had come to it with the display from UMD (its notes say "UMD /
+DVD": not so -- UMD's reader grew from its own P4 smoke display and never took MiSTer_DVD's output
+stage, whose `resample_bilinear` has always interpolated both ways, per field on interlaced pictures,
+its row choice fixed in MiSTer_DVD PR #142), never weighed as a quality choice. DVD's design is also
+the reference for the limitation below: within-field vertical chroma there costs a two-row chroma
+cache per plane. Asked by the maintainer 2026-10-12 ("go straight to the horizontal +
+frame-vertical step"); not measured on UMD's rig before the change.
+
+**The siting is H.264's default, type 0, fixed -- measured, not assumed.** Every one of the
+library's 691 clips (head SPS, ffmpeg `trace_headers`, 2026-10-12) has a VUI with
+`chroma_loc_info_present_flag` 0: E.2.1's inferred `chroma_sample_loc_type` 0. Chroma is
+co-sited with even luma columns and centred between luma rows 2m and 2m + 1. A stream declaring
+another siting would show a half-sample colour offset -- what every stream showed under nearest,
+never garbage; it is the row in `spec_hardening.md` "Known deviations". The H264 core's full
+version (its `chroma.md`: the siting from the SPS, eight chroma slots, bilinear at every scale,
++~900 ALM, +8 M10K, ~3 DSP) is not taken: no UMD disc needs the siting, every UMD picture is shown
+1:1, and the device is at 95 % ALM.
+
+**What changed, per path:**
+
+| path | horizontal | vertical |
+|---|---|---|
+| 480p, a frame store | interpolated | interpolated: row 2m `(3 h[m] + h[m - 1] + 2) >> 2`, row 2m + 1 `(3 h[m] + h[m + 1] + 2) >> 2` |
+| 480p, a field store (every deinterlace mode, the film weave / bob, the matched partner) | interpolated (rows a, b, d; the kernels run on them) | nearest within the field (rows a / d are the other field's: using them is P5a's chroma bleed) |
+| 480i Fit / Letterbox | interpolated (rows b, d) | nearest (the frame's rows, or the field's own) |
+| 480i Crop, the video window (both rasters) | unchanged: their own fractional taps on nearest chroma | unchanged |
+
+Horizontally an odd column x is `(c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1`, the picture's last
+column replicated. Two roundings (horizontal, then vertical), as the H264 core: within one code of
+ffmpeg's single-rounding upsample.
+
+**How, at no RAM, no multiplier, LAT 4 unchanged:**
+
+- **Rows b / d** already deliver chroma samples c0 and c0 + 1 in one read: Crop's even / odd
+  halves (S2). Crop's horizontal blend `DR_HB` at weight 8 sixteenths is `(a + b + 1) >> 1`
+  exactly, so the macro gains a weight argument and chroma its own (`s1_fc`: 8 on an odd column
+  where interpolated, else the Crop / window weight as before). The right edge: no blend on the
+  picture's last column (`ch_x`), whose c0 + 1 lies past the fetched row.
+- **Row a** (the 480p kernels' line above) is a whole-word copy with one address: it reads the
+  sample AHEAD, `(x + 1) >> 1` clamped to the picture's last chroma sample, and takes the previous
+  dot's read as the left neighbour (480p: one dot a clock, and a line's first column is even, so
+  no dot needs a neighbour from before the line). At 27 MHz the adder in front of the address is
+  no timing matter (the H264 core's was, at 86).
+  **Invariant relied on:** one raster dot a clock -- `emu` ties `sync_gen`'s `clk_en` to 1 (and
+  `disp_reader_tb` does the same). A pixel enable there would need `p_ua` / `p_va` updated on it.
+- **The vertical neighbour** of a frame store's line 2m is row a's chroma, of 2m + 1 row d's --
+  both in the ring of four. The chroma d copy reads row a's slot on an even line (`bk_dc`): a
+  frame store's kernel is b in every mode, so nothing else reads that copy there. The edges'
+  mirror (line 0's a is line 1, the last line's d the line above) makes the neighbour row m
+  itself, as the golden's edge rule states; a 720x576 picture's clipped line 479 takes the real
+  row 240 (its d is the real line 480).
+
+**Verification.** `tools/disp_golden.py`: `hup` / `up_h` / `up_ident` from the formulas above (not
+the RTL); the frame's `up_ident` checked against ffmpeg's own 4:2:0 -> 4:4:4 upsampling at the
+default siting (`scale=in_chroma_loc=left:flags=bilinear+full_chroma_int+accurate_rnd`, the
+H264 core's impulse-validated oracle) within one code, and asserted NOT within one code of
+nearest (an oracle that cannot tell them apart checks nothing). Field stores: each field's chroma
+`up_h` after ffmpeg's `separatefields`, as before. New wants: `disp_want_frame_il.hex` (the 480i
+frame arms), `disp_rgb_il.hex` (`plane_tb +il`'s video layer, `plane_golden.py`'s
+`plane_s*_rgb_il.hex`). `run_disp_reader.sh` GREEN (53 arms), `--red` Z1-Z11 (the column parity,
+row a's rounding / clamp / left tap, the vertical rows swapped, the vertical step on a field store,
+the right edge, nearest, 480i, Crop and the window kept out).
+
+**On the rig (.201, 2026-10-12, `UMD_chroma_20261012_0529.rbf`, the maintainer's go-ahead).** Six paused
+pictures in Progressive / Weave, each the raw 720x480 raster against ffmpeg's decode of the same picture
+(`tools/chroma_shot_check.py`: the clip and window from telemetry's `sh_pts`, the picture picked by each
+field's luma, so the choice does not depend on the chroma model), rendered with this section's rules and with
+the old nearest rule; the pause glyph's box (rows 436-460, columns 12-32) excluded:
+
+| shot | store | interpolated: pixels differing | nearest: pixels differing (max) |
+|---|---|---|---|
+| Akira 398.6 s | frame | **0** of 345,075 | 72,701 (37) |
+| Akira 423.7 s | frame | **0** | 96,732 (35) |
+| Akira 448.7 s | frame | **0** | 109,701 (61) |
+| Family Guy 61.6 s | field pair | **0** | 50,299 (67) |
+| Family Guy 86.7 s | field pair | **0** | 65,978 (42) |
+| Family Guy 111.7 s | field pair | **0** | 54,044 (56) |
+
+Silicon equals the golden bit for bit on both store kinds -- including row a's previous-dot tap, which the
+bench's tied `clk_en` could not prove; decode errors 0 throughout. (The first shots came back 720x405: .201's
+`video_mode=2` is a 720x480 HDMI output, so ascal shrinks a 16:9 picture on its input side; a temporary
+`video_mode=0` in the `[UMD]` section gave the raw raster -- `hil_harness.md` "Facts that bite".) Not looked
+at: 480i on a CRT (horizontal only there; the benches' `[il]` / `[lb]` arms cover it).
+
+**Known limitations.** Field stores stay nearest vertically (the ring holds the other field's
+lines: within-field interpolation needs rows y +- 2, i.e. the H264 core's chroma slots); at 480i
+a frame's rows stay nearest too (the walker's ring is by field line, row s - 1 is not kept). Crop
+and the menu window keep nearest chroma under their own taps. A declared siting other than type 0
+is not honoured (none in the library).

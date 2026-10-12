@@ -5,13 +5,23 @@
 as 7 hex digits (de 0 and black beyond the picture). The RGB is the BT.601 limited-range
 integer conversion umd/disp_reader.sv states, of each dot's Y / Cb / Cr:
 
-  frame   the store as a FRAME: luma line y takes chroma row y >> 1
+  frame   the store as a FRAME at 480p: chroma INTERPOLATED at H.264's default siting
+          (chroma_sample_loc_type 0; docs/display.md S12): horizontally co-sited with even
+          luma columns -- odd column x = (c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1, the right edge
+          replicated -- then vertically between luma rows 2m and 2m + 1 -- row 2m = (3 h[m] +
+          h[m - 1] + 2) >> 2, 2m + 1 = (3 h[m] + h[m + 1] + 2) >> 2, the picture's edges
+          mirrored as the reader's rows a / d are; checked here against ffmpeg's own upsampling
+          (scale=in_chroma_loc=left, bilinear, full_chroma_int) within one code
+  frame_il  the same store at 480i Fit / Letterbox: horizontally interpolated, rows nearest
+          (luma line y takes chroma row y >> 1)
   field   the store as a FIELD PAIR (line-interleaved), woven: luma line y takes its own
           field's chroma. That siting is NOT computed here from the RTL's formula
           (2 (y >> 2) + (y & 1)): ffmpeg's `separatefields` splits the woven picture into
           its two fields (every plane, chroma included, line-interleaved -- the layout the
           reconstruction writes and ffmpeg decodes to), each field's chroma is expanded with
-          the plain 4:2:0 rule of its own planes, and the two are woven back.
+          its own planes -- horizontally interpolated as the frame's, rows nearest (a field
+          store's rows above and below are the other field's) -- and the two are woven back.
+  Crop (480i) and the video window keep chroma NEAREST before their own taps (`up`).
   blend   the field pair's 4:4:4 lines through ffmpeg's `interlace` lowpass (vf_tinterlace:
           (1 + a + 2b + d) >> 2 on every line, per plane), the Blend kernel's definition. The
           filter clamps each FIELD's first and last lines to themselves; the reader mirrors
@@ -101,8 +111,38 @@ def words(p):
 
 
 def up(c):
-    """4:2:0 chroma -> one sample per luma dot (rows sited on luma row pairs)."""
+    """4:2:0 chroma -> one sample per luma dot, NEAREST (rows sited on luma row pairs): Crop and
+    the video window, whose taps are their own."""
     return np.repeat(np.repeat(c, 2, 0), 2, 1)
+
+
+def hup(c):
+    """(docs/display.md S12) horizontal interpolation at H.264's default siting: luma column x
+    takes c[x >> 1] (x even) or (c[x >> 1] + c[min((x + 1) >> 1, last)] + 1) >> 1 (x odd)."""
+    c = np.asarray(c, np.int64)
+    cols = np.arange(2 * c.shape[1])
+    n, nx = cols >> 1, np.minimum((cols + 1) >> 1, c.shape[1] - 1)
+    return np.where(cols & 1, (c[:, n] + c[:, nx] + 1) >> 1, c[:, n])
+
+
+def up_h(c):
+    """horizontally interpolated, rows nearest: 480i Fit / Letterbox, and each field of a field store"""
+    return np.repeat(hup(c), 2, 0)
+
+
+def up_ident(c):
+    """a FRAME's chroma at 480p: horizontal, then vertical -- luma row k takes (3 h[k >> 1] +
+    h[o >> 1] + 2) >> 2, o the row above (k even) or below (k odd), mirrored at the picture's
+    first / last row (the reader's a / d: k + 1 at the first, k - 1 at the last)"""
+    h = hup(c)
+    H = 2 * c.shape[0]
+    rows = []
+    for k in range(H):
+        ra = k + 1 if k == 0 else k - 1
+        rd = k - 1 if k == H - 1 else k + 1
+        o = ra if (k & 1) == 0 else rd
+        rows.append((3 * h[k >> 1] + h[o >> 1] + 2) >> 2)
+    return np.stack(rows)
 
 
 def rgb(Y, U, V):
@@ -144,12 +184,14 @@ def fields(Y, Cb, Cr):
     return res
 
 
-def woven444(Y, Cb, Cr):
-    """Every luma line with its own field's chroma, woven (H x W, three planes)."""
+def woven444(Y, Cb, Cr, cup=None):
+    """Every luma line with its own field's chroma, woven (H x W, three planes); `cup` each field's
+    chroma expansion (up_h, interpolated horizontally; up, nearest, for Crop and the window)."""
+    cup = up_h if cup is None else cup
     H, W = Y.shape
     planes = [np.zeros((H, W), np.int64) for _ in range(3)]
     for p, (yp, cb, cr) in enumerate(fields(Y, Cb, Cr)):
-        planes[0][p::2], planes[1][p::2], planes[2][p::2] = yp, up(cb), up(cr)
+        planes[0][p::2], planes[1][p::2], planes[2][p::2] = yp, cup(cb), cup(cr)
     return planes
 
 
@@ -259,13 +301,48 @@ def write_store(name, Y, Cb, Cr):
 # L: 720x480 (seed 7: the picture the frame / field fixtures have always used)
 L = picture(7, 720, 480)
 write_store("disp_store.hex", *L)
-write_want("disp_want_frame.hex", rgb(L[0], up(L[1]), up(L[2])))
+write_want("disp_want_frame.hex", rgb(L[0], up_ident(L[1]), up_ident(L[2])))
+write_want("disp_want_frame_il.hex", rgb(L[0], up_h(L[1]), up_h(L[2])))   # 480i: rows nearest
 # the frame's bare RGB, one dot a line: the video layer of tools/plane_golden.py,
 # tools/sub_overlay_golden.py and bench/umd/sub_overlay_tb.sv (dropped by P5f when the
-# disp_want_* files replaced it, while those three still read it: restored 2026-10-01)
-with open(os.path.join(out, "disp_rgb.hex"), "w") as f:
-    f.write("".join("%02x%02x%02x\n" % tuple(p) for p in rgb(L[0], up(L[1]), up(L[2])).reshape(-1, 3)))
+# disp_want_* files replaced it, while those three still read it: restored 2026-10-01);
+# disp_rgb_il.hex the same frame at 480i (plane_tb +il)
+for _nm, _cup in (("disp_rgb.hex", up_ident), ("disp_rgb_il.hex", up_h)):
+    with open(os.path.join(out, _nm), "w") as f:
+        f.write("".join("%02x%02x%02x\n" % tuple(p) for p in rgb(L[0], _cup(L[1]), _cup(L[2])).reshape(-1, 3)))
+
+
+def check_chroma_oracle(c):
+    """the independent check of the 480p frame's chroma: ffmpeg's own 4:2:0 -> 4:4:4 upsampling at
+    H.264's default siting (in_chroma_loc=left: the H264 core validated it on an impulse, 2026-10-09 --
+    the even column full, odd neighbours one half; luma rows 2m / 2m + 1 three quarters, the rows
+    beyond one quarter) against up_ident, within one code (ffmpeg rounds once, the reader twice)"""
+    if not HAVE_FFMPEG:
+        print("disp_golden: frame chroma NOT checked (no ffmpeg)")
+        return
+    h, w = c.shape
+    Yp = np.full((2 * h, 2 * w), 128)
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = os.path.join(d, "in.yuv"), os.path.join(d, "out.yuv")
+        with open(src, "wb") as f:
+            f.write(b"".join(p.astype(np.uint8).tobytes() for p in (Yp, c, c)))
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "%dx%d" % (2 * w, 2 * h),
+                        "-i", src, "-vf", "scale=in_chroma_loc=left:flags=bilinear+full_chroma_int+accurate_rnd",
+                        "-f", "rawvideo", "-pix_fmt", "yuv444p", dst], check=True)
+        raw = np.frombuffer(open(dst, "rb").read(), np.uint8).astype(np.int64)
+    n = 4 * h * w
+    assert raw.size == 3 * n, "ffmpeg's upsample: %d bytes" % raw.size
+    ref = raw[n:2 * n].reshape(2 * h, 2 * w)       # the U plane
+    dd = np.abs(up_ident(c) - ref)[1:-1, 1:-2]    # (ffmpeg's own edge rule at the borders)
+    assert dd.max() <= 1, "frame chroma %d codes from ffmpeg's upsampling" % dd.max()
+    # ...and it must not be nearest's (an oracle that cannot tell the two apart checks nothing)
+    assert np.abs(up(c) - ref)[1:-1, 1:-2].max() > 1, "ffmpeg's upsampling is nearest: not an oracle"
+    print("disp_golden: frame chroma within %d code of ffmpeg's upsampling (in_chroma_loc=left)" % dd.max())
+
+
+check_chroma_oracle(L[1])
 Lf = woven444(*L)
+Lf_n = woven444(*L, cup=up)                       # (nearest: Crop's and the window's rows)
 write_want("disp_want_field.hex", rgb(*Lf))
 write_want("disp_want_blend.hex", rgb(*blend(Lf)))
 write_want("disp_want_bob0.hex", rgb(*bob(Lf, 0)))
@@ -284,10 +361,11 @@ write_want("disp_want_t_blend.hex", rgb(*blend(woven444(*T)))[:RH])
 
 # 480i Analog Aspect (S2): Letterbox / Crop of the frame and of the pair, and with one kept
 # field (V7); the 480x272 picture under Letterbox stays Fit (a control)
-Lfr = [L[0], up(L[1]), up(L[2])]
+Lfr = [L[0], up_h(L[1]), up_h(L[2])]
+Lfr_n = [L[0], up(L[1]), up(L[2])]
 for nm, pl, mode, keep in (("lb", Lfr, "lb", None), ("lb_field", Lf, "lb", None), ("lb_keep1", Lf, "lb", 1),
-                           ("lb_keep0", Lf, "lb", 0), ("crop", Lfr, "crop", None), ("crop_keep0", Lf, "crop", 0),
-                           ("crop_field", Lf, "crop", None)):
+                           ("lb_keep0", Lf, "lb", 0), ("crop", Lfr_n, "crop", None), ("crop_keep0", Lf_n, "crop", 0),
+                           ("crop_field", Lf_n, "crop", None)):
     write_want_de("disp_want_il_%s.hex" % nm, *il_aspect(pl, mode, keep))
 # the fit path's identity with the 480p rasters (the S1 arms' premise), checked here
 for pl, keep, want in ((Lfr, None, rgb(*Lfr)), (Lf, None, rgb(*Lf)), (Lf, 0, rgb(*bob(Lf, 0))), (Lf, 1, rgb(*bob(Lf, 1)))):
@@ -356,7 +434,7 @@ WIN = {
 fmaxes = []
 for nm, (st, kp, g) in WIN.items():
     if st == "L":
-        rows = [L[0], up(L[1]), up(L[2])] if kp is None else [pl[kp::2] for pl in Lf]
+        rows = [L[0], up(L[1]), up(L[2])] if kp is None else [pl[kp::2] for pl in Lf_n]
     elif st == "S":
         rows = [S[0], up(S[1]), up(S[2])]
     else:
