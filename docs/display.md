@@ -858,7 +858,7 @@ picture alone. A plain SEEK to the end (a chapter mark at or past OUT, a menu's 
 takes the skip and now shows the last picture.
 
 
-## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ HW-CONFIRMED (.201)
+## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ MERGED (PR #2), ✅ HW-CONFIRMED (.201)
 
 **Why.** The reader showed 4:2:0 chroma NEAREST: each chroma sample repeated over its 2 x 2 luma
 block. Beside saturated detail (red above all: the largest chroma excursion at a low luma, which
