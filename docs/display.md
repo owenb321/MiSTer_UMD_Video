@@ -956,7 +956,7 @@ a frame's rows stay nearest too (the walker's ring is by field line, row s - 1 i
 and the menu window keep nearest chroma under their own taps. A declared siting other than type 0
 is not honoured (none in the library).
 
-## 13. A field store's vertical chroma step (`feature/chroma-field`, 2026-10-12)
+## 13. A field store's vertical chroma step (`feature/chroma-field`, 2026-10-12) -- ✅ HW-CONFIRMED (.201)
 
 **Why.** §12 left a field store's chroma nearest vertically: its rows a / d are the other field's. Each
 field's chroma row covers two of that field's lines, so in the woven picture a colour edge steps every
@@ -1007,6 +1007,20 @@ rule nor of the rows nearest. New wants: `disp_want_field` (Weave), `disp_want_s
 the field's last row inside the raster), `disp_want_field_il` (480i), the matched pairs. `run_disp_reader.sh`
 GREEN; `--red` V1-V8 (the direction, Bob's kept lines, both replicates, the other field's row, the
 weights' sides, the rounding, the fetch dropped).
+
+**On the rig (.201, 2026-10-12, `UMD_chromafld_20261012_1940.rbf`; the same procedure as §12: Progressive /
+Weave, paused, the raw raster, `tools/chroma_shot_check.py` now scoring every rule the reader has had):**
+
+| shot | store | §13 field step | §12 along the line (the previous build) | nearest |
+|---|---|---|---|---|
+| Family Guy 64.0 s | field pair | **0** of 345,075 | 30,580 (max 43) | 58,508 (62) |
+| Family Guy 89.0 s | field pair | **0** | 63,531 (45) | 98,810 (63) |
+| Family Guy 114.0 s | field pair | **0** | 45,793 (41) | 69,772 (60) |
+| Akira 273.9 s (the control) | frame | §12 both ways: **0** | -- | 34,769 (32) |
+
+Pixels differing outside the pause glyph's box. The tool's control the other way: the previous build's shot
+(§12's table) matches §12's rule and differs from §13's on 46,161 pixels. Decode errors 0; ram2's longest
+BUSY run (`d2_busy_max`) 49 on Family Guy and on Akira alike -- the neighbour fetch shows no occupancy cost.
 
 **Known limitations.** Bob and Blend keep the rows nearest within the field (their kernels mix the
 fields' lines; giving each kernel line its own vertical step needs a neighbour per window line). 480i
