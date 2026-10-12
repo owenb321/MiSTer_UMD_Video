@@ -905,6 +905,8 @@ ffmpeg's single-rounding upsample.
   dot's read as the left neighbour (480p: one dot a clock, and a line's first column is even, so
   no dot needs a neighbour from before the line). At 27 MHz the adder in front of the address is
   no timing matter (the H264 core's was, at 86).
+  **Invariant relied on:** one raster dot a clock -- `emu` ties `sync_gen`'s `clk_en` to 1 (and
+  `disp_reader_tb` does the same). A pixel enable there would need `p_ua` / `p_va` updated on it.
 - **The vertical neighbour** of a frame store's line 2m is row a's chroma, of 2m + 1 row d's --
   both in the ring of four. The chroma d copy reads row a's slot on an even line (`bk_dc`): a
   frame store's kernel is b in every mode, so nothing else reads that copy there. The edges'
