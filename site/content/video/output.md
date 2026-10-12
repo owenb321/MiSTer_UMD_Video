@@ -9,6 +9,9 @@ own pulldown flags.
   [Deinterlace](../playback/settings.md) setting says: Weave, Bob or Blend. Film and
   progressive pictures are never deinterlaced. On the 480i raster, fields are sent as
   fields.
+- **Colour detail** is blended smoothly between the stored colour samples, so a saturated
+  edge (red above all) shows no hard two-pixel colour stripe after the scaler enlarges it
+  ([Compatibility](../reference/compatibility.md#video)).
 
 - **Analog**: a native 480i raster for CRTs, chosen by the
   [Video Output](../playback/settings.md) option (Auto follows `MiSTer.ini`); while it is

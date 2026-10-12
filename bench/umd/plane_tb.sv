@@ -10,7 +10,8 @@
 // +scale      menu-style geometries set in the vertical blank: 480x272 up to the raster,
 //             a placed downscale, a refused one (the source past the 720-pixel row)
 // +il         (sub mode) the 480i raster (docs/analog.md): raw raster coordinates (V11), so
-//             the expected rasters are the 480p ones, every pixel scored on both of its dots
+//             the expected rasters are the 480p ones (the composite over disp_rgb_il.hex: the
+//             frame's chroma rows nearest at 480i, docs/display.md S12), every pixel scored on both of its dots
 //             and both fields; the strobe at line 501 (the bottom field's blank: a flip at a
 //             frame's end)
 // Frame 0 warms up; frames 1-3 are scored, every active dot:
@@ -171,7 +172,7 @@ initial begin
     for (int k = 0; k < 3; k++) begin
         fn = $sformatf("%s%0d_argb.hex", pre, k);
         $readmemh(fn, e_argb, k * NDOT, (k + 1) * NDOT - 1);
-        fn = $sformatf("%s%0d_rgb.hex", pre, k);
+        fn = $sformatf("%s%0d_rgb%0s.hex", pre, k, (il && !scale) ? "_il" : "");   // (480i: the frame's chroma rows nearest)
         $readmemh(fn, e_rgb, k * NDOT, (k + 1) * NDOT - 1);
     end
     fn = scale ? "bench/umd/fixtures/gen/plane_scale.txt" : "bench/umd/fixtures/gen/plane_sub.txt";

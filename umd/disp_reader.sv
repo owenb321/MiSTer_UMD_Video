@@ -58,6 +58,24 @@
 // variant (8, 1). Latched at line 480 (cm_c, cm_r; cm_v: the refresh was a 480p field pair) for
 // disp_ctl's pickup at line 500, and cleared.
 //
+// CHROMA INTERPOLATED (docs/display.md S12; the H264 core's "chroma at the identity", ported):
+// nearest chroma repeats each 4:2:0 sample over its 2 x 2 block, a hard two-pixel colour step
+// beside saturated detail that the HDMI scaler widens into bands. At H.264's default siting
+// (chroma_sample_loc_type 0 -- every clip of the library: no UMD declares another) chroma is
+// co-sited with even luma columns and centred between luma rows 2m and 2m + 1, so
+//   horizontally (480p, and 480i Fit / Letterbox: column x is the picture's, one a pixel) an odd
+//     column x is (c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1, the picture's last column replicated --
+//     on rows b / d the halves' right tap (Crop's DR_HB at weight 8/16: bit-exact), on row a
+//     (the 480p kernels') the sample AHEAD, (x + 1) >> 1 clamped, its left neighbour the
+//     previous dot's read (480p: one dot a clock);
+//   vertically (480p, a FRAME store only) row 2m = (3 h[m] + h[m - 1] + 2) >> 2, row 2m + 1 =
+//     (3 h[m] + h[m + 1] + 2) >> 2: the neighbour is row a's chroma on an even line, row d's on
+//     an odd one -- both in the ring; the chroma d copy reads row a's slot on an even line (a frame
+//     store's kernel is b, so nothing else reads it), and the edges' mirror makes it row m itself.
+// A field store keeps its chroma rows nearest vertically (its a / d are the OTHER field's), its
+// kernels run on the interpolated rows. Crop and the video window keep their own taps (their
+// positions are fractional). No RAM, no multiplier, LAT unchanged.
+//
 // 480i (`il`, docs/analog.md S2-S3): h_pos counts DOTS (a pixel is two: x = h_pos >> 1) and
 // v_pos is the frame line {field line i, raster parity q}. The deinterlacer is off (a CRT
 // interlaces; HDMI's ascal weaves or bobs). Each output line is built from SOURCE FIELD
@@ -486,11 +504,23 @@ module disp_reader #(
     wire  [9:0]  t_e  = t0 + {9'd0, t0[0]};                          // the even of {t0, t0 + 1}
     wire  [8:0]  c0   = t0[9:1];                                     // t0's chroma sample
     wire  [8:0]  c_e  = c0 + {8'd0, c0[0]};                          // the even of {c0, c0 + 1}
+    // (CHROMA INTERPOLATED, the header) where chroma is interpolated horizontally (ch_h), an odd
+    // column inside the picture (ch_x: its right tap exists), the frame's vertical step (ch_v);
+    // row a's sample ahead, (x + 1) >> 1 clamped to the picture's last chroma sample
+    wire         ch_h = !fw_on && !crop;
+    wire         ch_x = ch_h && x[0] && ({2'd0, x} + 12'd1 < {pic_w_mbs, 4'd0});
+    wire         ch_v = !il && !fw_on && !pic_field;
+    wire  [10:0] ca_u = ({1'b0, x} + 11'd1) >> 1;
+    wire  [10:0] ca_l = {pic_w_mbs, 3'd0} - 11'd1;
+    wire  [8:0]  ca   = (ca_u > ca_l) ? ca_l[8:0] : ca_u[8:0];
+    wire  [1:0]  bk_dc = (ch_v && !v_pos[0]) ? bk_a : bk_d;         // the chroma d copy's slot
     logic [63:0] q_ya, q_cba, q_cra;
     logic [31:0] q_ybe, q_ybo, q_yde, q_ydo, q_cbbe, q_cbbo, q_cbde, q_cbdo, q_crbe, q_crbo, q_crde, q_crdo;
     logic [2:0]  s1_by, s1_bc;
     logic [1:0]  s1_le, s1_lo, s1_lce, s1_lco;
-    logic [3:0]  s1_f, s1_wf;
+    logic [3:0]  s1_f, s1_wf, s1_fc;       // (s1_fc: chroma's horizontal weight, sixteenths)
+    logic        s1_cx, s1_cv;             // (CHROMA INTERPOLATED) an odd column's blend; the frame's vertical step
+    logic [7:0]  p_ua, p_va;               // row a's previous dot (the left neighbour of an odd column)
     logic        s1_win;
     logic        s1_t0o, s1_c0o;
     logic [2:0]  s1_wk;
@@ -506,14 +536,14 @@ module disp_reader #(
                      (!il || cur_in)));                               // (Letterbox's bars: black)
     always_ff @(posedge clk) begin
         q_ya  <= ybuf_a[{bk_a, x[9:3]}];
-        q_cba <= cbbuf_a[{bk_a, x[9:4]}];
-        q_cra <= crbuf_a[{bk_a, x[9:4]}];
+        q_cba <= cbbuf_a[{bk_a, ca[8:3]}];                             // (the sample ahead: the header)
+        q_cra <= crbuf_a[{bk_a, ca[8:3]}];
         q_ybe <= ybe_b[{bk_b, t_e[9:3]}];  q_ybo <= ybo_b[{bk_b, t0[9:3]}];
         q_yde <= ybe_d[{bk_d, t_e[9:3]}];  q_ydo <= ybo_d[{bk_d, t0[9:3]}];
         q_cbbe <= cbe_b[{bk_b, c_e[8:3]}]; q_cbbo <= cbo_b[{bk_b, c0[8:3]}];
-        q_cbde <= cbe_d[{bk_d, c_e[8:3]}]; q_cbdo <= cbo_d[{bk_d, c0[8:3]}];
+        q_cbde <= cbe_d[{bk_dc, c_e[8:3]}]; q_cbdo <= cbo_d[{bk_dc, c0[8:3]}];
         q_crbe <= cre_b[{bk_b, c_e[8:3]}]; q_crbo <= cro_b[{bk_b, c0[8:3]}];
-        q_crde <= cre_d[{bk_d, c_e[8:3]}]; q_crdo <= cro_d[{bk_d, c0[8:3]}];
+        q_crde <= cre_d[{bk_dc, c_e[8:3]}]; q_crdo <= cro_d[{bk_dc, c0[8:3]}];
     end
     // stage 2: the taps out of the halves (the lane: the sample's bits [2:1])
     wire  [7:0]  yb_e = q_ybe[8*s1_le +: 8],   yb_o = q_ybo[8*s1_lo +: 8];
@@ -551,28 +581,37 @@ module disp_reader #(
     logic signed [10:0] hsum;
     logic signed [17:0] pv, ps8;
     logic signed [10:0] vsum;
-    // o = a + (((b - a) f + 8) >> 4), f in 0..15 sixteenths (no multiplier; Crop's quarters x 4)
-    `define DR_HB(o, a, b) begin dh = $signed({2'b0, b}) - $signed({2'b0, a}); \
-        ht = (s1_f[0] ? {{4{dh[9]}}, dh} : 14'sd0) + (s1_f[1] ? {{3{dh[9]}}, dh, 1'b0} : 14'sd0) + \
-             (s1_f[2] ? {{2{dh[9]}}, dh, 2'b0} : 14'sd0) + (s1_f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd8; \
+    // o = a + (((b - a) f + 8) >> 4), f in 0..15 sixteenths (no multiplier; Crop's quarters x 4);
+    // f 8 is (a + b + 1) >> 1 exactly (CHROMA INTERPOLATED)
+    `define DR_HB(o, a, b, f) begin dh = $signed({2'b0, b}) - $signed({2'b0, a}); \
+        ht = (f[0] ? {{4{dh[9]}}, dh} : 14'sd0) + (f[1] ? {{3{dh[9]}}, dh, 1'b0} : 14'sd0) + \
+             (f[2] ? {{2{dh[9]}}, dh, 2'b0} : 14'sd0) + (f[3] ? {dh[9], dh, 3'b0} : 14'sd0) + 14'sd8; \
         hs = ht >>> 4; hsum = $signed({3'b0, a}) + hs[10:0]; o = hsum[7:0]; end
     // o = a + (((b - a) w + 128) >> 8)
     `define DR_VB(o, a, b) begin pv = ($signed({2'b0, b}) - $signed({2'b0, a})) * $signed({1'b0, w6}); \
         ps8 = (pv + 18'sd128) >>> 8; vsum = $signed({3'b0, a}) + ps8[10:0]; o = vsum[7:0]; end
     always_comb begin
-        `DR_HB(hyb, yb, yb1) `DR_HB(hyd, yd, yd1)
-        `DR_HB(hub, ub, ub1) `DR_HB(hud, ud, ud1)
-        `DR_HB(hvb, vb, vb1) `DR_HB(hvd, vd, vd1)
+        `DR_HB(hyb, yb, yb1, s1_f) `DR_HB(hyd, yd, yd1, s1_f)
+        `DR_HB(hub, ub, ub1, s1_fc) `DR_HB(hud, ud, ud1, s1_fc)
+        `DR_HB(hvb, vb, vb1, s1_fc) `DR_HB(hvd, vd, vd1, s1_fc)
         `DR_VB(iy, hyb, hyd) `DR_VB(iu, hub, hud) `DR_VB(iv, hvb, hvd)
     end
     `undef DR_HB
     `undef DR_VB
+    // (CHROMA INTERPOLATED) row a's chroma at an odd column: (c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1,
+    // the left tap the previous dot's read; rows b / d are hub / hud (their weight s1_fc)
+    wire  [8:0]  ua_s = {1'b0, p_ua} + {1'b0, ua} + 9'd1, va_s = {1'b0, p_va} + {1'b0, va} + 9'd1;
+    wire  [7:0]  hua = s1_cx ? ua_s[8:1] : ua, hva = s1_cx ? va_s[8:1] : va;
     wire  [9:0]  yl = {2'd0, ya} + {1'd0, yb, 1'b0} + {2'd0, yd} + 10'd1;
-    wire  [9:0]  ul = {2'd0, ua} + {1'd0, ub, 1'b0} + {2'd0, ud} + 10'd1;
-    wire  [9:0]  vl = {2'd0, va} + {1'd0, vb, 1'b0} + {2'd0, vd} + 10'd1;
+    wire  [9:0]  ul = {2'd0, hua} + {1'd0, hub, 1'b0} + {2'd0, hud} + 10'd1;
+    wire  [9:0]  vl = {2'd0, hva} + {1'd0, hvb, 1'b0} + {2'd0, hvd} + 10'd1;
     wire  [8:0]  ym = {1'd0, ya} + {1'd0, yd} + 9'd1;
-    wire  [8:0]  um = {1'd0, ua} + {1'd0, ud} + 9'd1;
-    wire  [8:0]  vm = {1'd0, va} + {1'd0, vd} + 9'd1;
+    wire  [8:0]  um = {1'd0, hua} + {1'd0, hud} + 9'd1;
+    wire  [8:0]  vm = {1'd0, hva} + {1'd0, hvd} + 9'd1;
+    // (CHROMA INTERPOLATED) a frame store's vertical step: (3 b + n + 2) >> 2, n the neighbouring
+    // chroma row (the d copy: row a's slot on an even line, row d's on an odd one)
+    wire  [9:0]  uy = {1'b0, hub, 1'b0} + {2'd0, hub} + {2'd0, hud} + 10'd2;
+    wire  [9:0]  vy = {1'b0, hvb, 1'b0} + {2'd0, hvb} + {2'd0, hvd} + 10'd2;
     wire         two = il || s1_win;      // the walkers' two-tap path (480i, the window)
     // fj#80: one dot's comb terms, |2b - a - d| and |a - d| (the window's raw luma)
     wire signed [10:0] cm_s = $signed({2'b0, yb, 1'b0}) - $signed({3'b0, ya}) - $signed({3'b0, yd});
@@ -580,8 +619,8 @@ module disp_reader #(
     wire  [8:0]  cr_s = {1'b0, ya} - {1'b0, yd};
     wire  [7:0]  cr_t = cr_s[8] ? -cr_s[7:0] : cr_s[7:0];
     wire  [7:0]  yk = two ? iy : (s1_k == 2'd2) ? yl[9:2] : (s1_k == 2'd1) ? ym[8:1] : yb;
-    wire  [7:0]  uk = two ? iu : (s1_k == 2'd2) ? ul[9:2] : (s1_k == 2'd1) ? um[8:1] : ub;
-    wire  [7:0]  vk = two ? iv : (s1_k == 2'd2) ? vl[9:2] : (s1_k == 2'd1) ? vm[8:1] : vb;
+    wire  [7:0]  uk = two ? iu : (s1_k == 2'd2) ? ul[9:2] : (s1_k == 2'd1) ? um[8:1] : s1_cv ? uy[9:2] : hub;
+    wire  [7:0]  vk = two ? iv : (s1_k == 2'd2) ? vl[9:2] : (s1_k == 2'd1) ? vm[8:1] : s1_cv ? vy[9:2] : hvb;
     logic signed [9:0]  c2, d2, e2;
     logic signed [19:0] p_c, p_ecr, p_dcb, p_dg, p_eg;
     logic signed [19:0] rr, gg, bb;
@@ -590,15 +629,18 @@ module disp_reader #(
             s1_by <= '0; s1_bc <= '0; s1_k <= '0; s1_in <= 1'b0;
             s1_le <= '0; s1_lo <= '0; s1_lce <= '0; s1_lco <= '0; s1_f <= '0; s1_t0o <= 1'b0; s1_c0o <= 1'b0; s1_wk <= '0; s2_in <= 1'b0; s3_in <= 1'b0; de_d <= '0;
             s1_wf <= '0; s1_win <= 1'b0;
+            s1_fc <= '0; s1_cx <= 1'b0; s1_cv <= 1'b0; p_ua <= '0; p_va <= '0;
             s1_cm <= 1'b0; acc_c <= '0; acc_r <= '0; cm_c <= '0; cm_r <= '0; cm_v <= 1'b0;
             c2 <= '0; d2 <= '0; e2 <= '0; p_c <= '0; p_ecr <= '0; p_dcb <= '0; p_dg <= '0; p_eg <= '0;
             r <= '0; g <= '0; b <= '0; de_out <= 1'b0;
         end else begin
             // stage 1 (the RAM read above) -- remember which bytes
-            s1_by <= x[2:0]; s1_bc <= x[3:1]; s1_k <= kern; s1_in <= in_pic;
+            s1_by <= x[2:0]; s1_bc <= ca[2:0]; s1_k <= kern; s1_in <= in_pic;
             s1_le <= t_e[2:1]; s1_lo <= t0[2:1]; s1_lce <= c_e[2:1]; s1_lco <= c0[2:1];
             s1_t0o <= t0[0]; s1_c0o <= c0[0]; s1_f <= hf_x; s1_wk <= cur_k;
             s1_wf <= cur_wf; s1_win <= fw_on;
+            s1_fc <= ch_h ? (ch_x ? 4'd8 : 4'd0) : hf_x; s1_cx <= ch_x; s1_cv <= ch_v;
+            p_ua <= ua; p_va <= va;              // (stage 2's row-a bytes: the next dot's left neighbour)
             s1_cm <= in_pic && !il && !fw_on && (x[2:0] == 3'd0);
             // fj#80: the comb sums (stage 2: the window's raw luma), latched at line 480
             if (!il && v_pos == 12'd480 && h_pos == 12'd0) begin
