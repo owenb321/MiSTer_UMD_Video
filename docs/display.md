@@ -858,7 +858,7 @@ picture alone. A plain SEEK to the end (a chapter mark at or past OUT, a menu's 
 takes the skip and now shows the last picture.
 
 
-## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported)
+## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ HW-CONFIRMED (.201)
 
 **Why.** The reader showed 4:2:0 chroma NEAREST: each chroma sample repeated over its 2 x 2 luma
 block. Beside saturated detail (red above all: the largest chroma excursion at a low luma, which
@@ -924,6 +924,27 @@ frame arms), `disp_rgb_il.hex` (`plane_tb +il`'s video layer, `plane_golden.py`'
 `plane_s*_rgb_il.hex`). `run_disp_reader.sh` GREEN (53 arms), `--red` Z1-Z11 (the column parity,
 row a's rounding / clamp / left tap, the vertical rows swapped, the vertical step on a field store,
 the right edge, nearest, 480i, Crop and the window kept out).
+
+**On the rig (.201, 2026-10-12, `UMD_chroma_20261012_0529.rbf`, the maintainer's go-ahead).** Six paused
+pictures in Progressive / Weave, each the raw 720x480 raster against ffmpeg's decode of the same picture
+(`tools/chroma_shot_check.py`: the clip and window from telemetry's `sh_pts`, the picture picked by each
+field's luma, so the choice does not depend on the chroma model), rendered with this section's rules and with
+the old nearest rule; the pause glyph's box (rows 436-460, columns 12-32) excluded:
+
+| shot | store | interpolated: pixels differing | nearest: pixels differing (max) |
+|---|---|---|---|
+| Akira 398.6 s | frame | **0** of 345,075 | 72,701 (37) |
+| Akira 423.7 s | frame | **0** | 96,732 (35) |
+| Akira 448.7 s | frame | **0** | 109,701 (61) |
+| Family Guy 61.6 s | field pair | **0** | 50,299 (67) |
+| Family Guy 86.7 s | field pair | **0** | 65,978 (42) |
+| Family Guy 111.7 s | field pair | **0** | 54,044 (56) |
+
+Silicon equals the golden bit for bit on both store kinds -- including row a's previous-dot tap, which the
+bench's tied `clk_en` could not prove; decode errors 0 throughout. (The first shots came back 720x405: .201's
+`video_mode=2` is a 720x480 HDMI output, so ascal shrinks a 16:9 picture on its input side; a temporary
+`video_mode=0` in the `[UMD]` section gave the raw raster -- `hil_harness.md` "Facts that bite".) Not looked
+at: 480i on a CRT (horizontal only there; the benches' `[il]` / `[lb]` arms cover it).
 
 **Known limitations.** Field stores stay nearest vertically (the ring holds the other field's
 lines: within-field interpolation needs rows y +- 2, i.e. the H264 core's chroma slots); at 480i

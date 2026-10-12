@@ -42,6 +42,12 @@ Circuit: `309FAFA7`). The reader simply finishes early (`title_done`) at the cut
 
 ## Facts that bite (inherited, all measured on the same platform)
 
+- **A plain `shot` is the raw raster only when ascal does not shrink its input** (2026-10-12, .201): with
+  `video_mode=2` (a 720x480 HDMI output) a 16:9 picture is fitted as 720x405 and ascal downscales on its
+  INPUT side, so the screenshot -- ascal's input buffer at its own size -- came back 720x405, resampled. Any
+  pixel-exact shot comparison needs an output at least 720x480 tall for the picture: a temporary
+  `video_mode=0` line in `[UMD]` (removed after), and check the PNG's size before scoring it.
+
 - **A user's own `[UMD] main=` line beat the harness's** (2026-10-09, .236, fj#71): the maintainer installed the
   release's UMD Main (`main=MiSTer_UMD` in `[UMD]`), `deploy --main` inserted its line right after the
   header, and Main takes the LAST `main=` of a section -- the old Main ran and the new host code was silently
