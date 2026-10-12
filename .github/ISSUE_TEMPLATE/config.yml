@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Read the manual first
+    url: https://owenb321.github.io/MiSTer_UMD_Video/reference/troubleshooting/
+    about: Troubleshooting covers most problems, including several that look like bugs.
+  - name: Is this disc supported?
+    url: https://owenb321.github.io/MiSTer_UMD_Video/reference/compatibility/
+    about: What plays, what does not, and what is known-incomplete.

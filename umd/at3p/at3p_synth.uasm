@@ -1,0 +1,511 @@
+; at3p_synth.uasm -- the synthesis control (at3p_fixed.FixedDecoder.decode, tones_fx;
+; included by at3p.uasm). The arithmetic is in the vector ops; this is their sequencing.
+
+.equ S_NOW  0x1B0          ; TONESYN: the previous frame's tone record
+.equ S_NXT  0x1B1          ;          this frame's
+.equ S_R1NZ 0x1B2
+.equ S_R2NZ 0x1B3
+.equ S_EHS  0x1B4          ; ENVAPPLY arguments
+.equ S_EST  0x1B5
+.equ S_EHT  0x1B6
+.equ S_ESP  0x1B7
+.equ S_EOF  0x1B8
+.equ S_ERG  0x1B9
+
+SYNTH:  li   r1, 0                  ; the noise start index of each coded subband
+        li   r2, 0
+        ld   r3, U_USED
+SY_RNG: bge  r1, r3, SY_RNG2
+        ld   r4, SF[r1]
+        add  r2, r2, r4
+        ld   r4, 0x80+SF[r1]
+        add  r2, r2, r4
+        addi r1, r1, 1
+        jmp  SY_RNG
+SY_RNG2: li  r1, 0
+        ld   r3, U_NCSB
+SY_RNGL: bge r1, r3, SY_CH0
+        andi r4, r2, 0x3FC
+        st   r4, SBRNG[r1]
+        addi r2, r2, 128
+        addi r1, r1, 1
+        jmp  SY_RNGL
+SY_CH0: st   r0, S_CH
+SY_CH:  st   r0, S_SB
+SY_SB:  ld   r1, S_SB
+        ld   r2, U_NSB
+        bge  r1, r2, SY_TZ
+        vop  xclr
+        call RESID
+        ld   r1, S_SB               ; negate: channel 1 of a subband the unit flags
+        ld   r2, S_CH
+        ld   r8, NEG[r1]
+        and  r8, r8, r2
+        vop  xnorm
+        call GAIN_E
+        ld   r1, S_SB               ; window shapes: previous << 1 | current
+        ld   r2, S_CH
+        shli r3, r2, 4
+        add  r3, r3, r1
+        ld   r4, PRVB
+        add  r4, r4, r3
+        ld   r9, B_WND[r4]
+        shli r9, r9, 1
+        ld   r4, CURB
+        add  r4, r4, r3
+        ld   r5, B_WND[r4]
+        or   r9, r9, r5
+        mov  r8, r1
+        shli r10, r1, 7
+        mov  r11, r2
+        vop  imdct
+        ld   r1, S_SB
+        addi r1, r1, 1
+        st   r1, S_SB
+        jmp  SY_SB
+SY_TZ:  ld   r1, U_NSB              ; subbands past num_subbands: time and overlap zero
+        shli r8, r1, 7
+        ld   r9, S_CH
+        li   r10, 2048
+        sub  r10, r10, r8
+        vop  tzero
+        ld   r3, CURB               ; tones, if either frame has them
+        ld   r4, PRVB
+        ld   r5, B_TP[r3]
+        ld   r8, B_TP[r4]
+        or   r5, r5, r8
+        beqi r5, 0, SY_IPQF
+        st   r0, S_SB
+SY_TSB: ld   r2, S_SB
+        ld   r5, U_NSB
+        bge  r2, r5, SY_IPQF
+        ld   r6, S_CH
+        ld   r3, CURB
+        call TADDR
+        ld   r8, T_NW[r1]
+        ld   r3, PRVB
+        call TADDR
+        ld   r9, T_NW[r1]
+        or   r8, r8, r9
+        beqi r8, 0, SY_TNX
+        call TONESYN
+SY_TNX: ld   r2, S_SB
+        addi r2, r2, 1
+        st   r2, S_SB
+        jmp  SY_TSB
+SY_IPQF: ld  r8, S_CH
+        vop  ipqf
+        ld   r1, S_CH
+        addi r1, r1, 1
+        st   r1, S_CH
+        blti r1, 2, SY_CH
+        ret
+
+; the residual of subband S_SB for output channel S_CH (at3p_fixed.residual)
+RESID:  ld   r1, U_MUTE
+        bnei r1, 0, RS_RET
+        ld   r1, S_SB
+        ld   r2, U_NCSB
+        bge  r1, r2, RS_RET
+        ld   r2, S_CH
+        ld   r3, SWAP[r1]
+        xor  r4, r2, r3             ; src = ch ^ swap
+        st   r4, S_A
+        ld   r5, C_SB_TO_QU[r1]     ; dequantise qu in [lo, min(hi, used))
+        ld   r6, C_SB_TO_QU+1[r1]
+        ld   r7, U_USED
+        min  r7, r7, r6
+        st   r5, S_QU
+RS_DQ:  ld   r5, S_QU
+        bge  r5, r7, RS_NZ
+        ld   r4, S_A
+        shli r6, r4, 7
+        add  r6, r6, r5
+        ld   r11, WL[r6]
+        beqi r11, 0, RS_DQN
+        ld   r12, SF[r6]
+        mov  r8, r4                 ; the spectrum's channel (the master's for a copied unit)
+        beqi r4, 0, RS_DQA
+        ld   r9, COPY[r5]
+        beqi r9, 0, RS_DQA
+        li   r8, 0
+RS_DQA: shli r8, r8, 11
+        ld   r9, C_QU_TO_SPEC_POS[r5]
+        add  r8, r8, r9
+        ld   r10, C_QU_TO_SPEC_POS+1[r5]
+        sub  r9, r10, r9
+        ld   r10, C_QU_TO_SPEC_POS[r5]
+        ld   r1, S_SB
+        shli r1, r1, 7
+        sub  r10, r10, r1
+        vop  dq
+RS_DQN: ld   r5, S_QU
+        addi r5, r5, 1
+        st   r5, S_QU
+        jmp  RS_DQ
+RS_NZ:  ld   r1, S_SB               ; power compensation: this channel's levels and gains
+        ld   r2, S_CH
+        shli r3, r2, 7
+        ld   r4, C_SB_TO_POWGRP[r1]
+        add  r4, r4, r3
+        ld   r13, PWR[r4]
+        beqi r13, 15, RS_RET
+        shli r5, r1, 3              ; gcv from the gain curves (this frame g1, previous g2)
+        add  r5, r5, r3
+        ld   r6, CURB
+        add  r6, r6, r5
+        addi r6, r6, B_GAIN         ; g1
+        ld   r7, PRVB
+        add  r7, r7, r5
+        addi r7, r7, B_GAIN         ; g2
+        li   r14, 0                 ; gcv
+        li   r8, 0                  ; gain_lev
+        ld   r9, 0[r6]
+        beqi r9, 0, RS_G2
+        ld   r8, 1[r6]
+        andi r8, r8, 15
+        li   r10, 6
+        sub  r8, r10, r8
+RS_G2:  ld   r9, 0[r7]
+        li   r10, 0
+RS_G2L: bge  r10, r9, RS_G1
+        ld   r11, 1[r7+r10]
+        andi r11, r11, 15
+        addi r11, r11, -6
+        sub  r11, r8, r11
+        max  r14, r14, r11
+        addi r10, r10, 1
+        jmp  RS_G2L
+RS_G1:  ld   r9, 0[r6]
+        li   r10, 0
+RS_G1L: bge  r10, r9, RS_NQ
+        ld   r11, 1[r6+r10]
+        andi r11, r11, 15
+        li   r12, 6
+        sub  r11, r12, r11
+        max  r14, r14, r11
+        addi r10, r10, 1
+        jmp  RS_G1L
+RS_NQ:  ld   r5, C_SB_TO_QU[r1]     ; noise into qu in [lo (+2 in subband 0), hi)
+        bnei r1, 0, RS_NQ0
+        addi r5, r5, 2
+RS_NQ0: st   r5, S_QU
+RS_NL:  ld   r1, S_SB
+        ld   r5, S_QU
+        ld   r6, C_SB_TO_QU+1[r1]
+        bge  r5, r6, RS_RET
+        ld   r4, S_A
+        shli r6, r4, 7
+        add  r6, r6, r5
+        ld   r11, WL[r6]
+        beqi r11, 0, RS_NN
+        ld   r12, SF[r6]
+        ld   r8, SBRNG[r1]
+        ld   r9, C_QU_TO_SPEC_POS[r5]
+        ld   r10, C_QU_TO_SPEC_POS+1[r5]
+        sub  r9, r10, r9
+        ld   r10, C_QU_TO_SPEC_POS[r5]
+        shli r1, r1, 7
+        sub  r10, r10, r1
+        vop  nz
+RS_NN:  ld   r5, S_QU
+        addi r5, r5, 1
+        st   r5, S_QU
+        jmp  RS_NL
+RS_RET: ret
+
+; the gain exponent tables of subband S_SB, channel S_CH: E1 (MEM_E + 0) from the
+; previous frame's curve plus this frame's scale 4 (6 - gcs), E2 (MEM_E + 128) from this
+; frame's curve
+GAIN_E: ld   r1, S_SB
+        ld   r2, S_CH
+        shli r3, r2, 7
+        shli r4, r1, 3
+        add  r3, r3, r4
+        ld   r4, CURB
+        add  r4, r4, r3
+        addi r4, r4, B_GAIN         ; this frame's record
+        li   r5, 6                  ; gcs
+        ld   r6, 0[r4]
+        beqi r6, 0, GE_GCS
+        ld   r5, 1[r4]
+        andi r5, r5, 15
+GE_GCS: li   r6, 6
+        sub  r6, r6, r5
+        shli r6, r6, 2              ; 4 (6 - gcs)
+        st   r4, S_B
+        ld   r1, PRVB
+        add  r1, r1, r3
+        addi r1, r1, B_GAIN
+        li   r2, MEM_E
+        mov  r3, r6
+        call GEXP
+        ld   r1, S_B
+        li   r2, MEM_E+128
+        li   r3, 0
+        call GEXP
+        ret
+
+; gain_exps: r1 = gain record, r2 = table base, r3 = the constant added
+GEXP:   ld   r4, 0[r1]              ; num_points
+        li   r5, 0                  ; pos
+        li   r6, 0                  ; point
+GX_P:   bge  r6, r4, GX_TAIL
+        ld   r7, 1[r1+r6]
+        andi r8, r7, 15             ; cur
+        shri r7, r7, 4
+        shli r7, r7, 2              ; last = loc << 2
+        li   r9, 6                  ; next level (6 after the last point)
+        addi r10, r6, 1
+        bge  r10, r4, GX_NX
+        ld   r9, 2[r1+r6]
+        andi r9, r9, 15
+GX_NX:  sub  r9, r9, r8             ; d = next - cur
+        li   r10, 6
+        sub  r10, r10, r8
+        shli r10, r10, 2
+        add  r10, r10, r3           ; value = add + 4 (6 - cur)
+GX_C:   bge  r5, r7, GX_R
+        st   r10, 0[r2+r5]
+        addi r5, r5, 1
+        jmp  GX_C
+GX_R:   li   r11, 4
+GX_RL:  beqi r11, 0, GX_PN
+        bgei r5, 128, GX_PN
+        st   r10, 0[r2+r5]
+        sub  r10, r10, r9
+        addi r5, r5, 1
+        addi r11, r11, -1
+        jmp  GX_RL
+GX_PN:  addi r6, r6, 1
+        jmp  GX_P
+GX_TAIL: li  r12, 128
+GX_TL:  bge  r5, r12, GX_RET
+        st   r3, 0[r2+r5]
+        addi r5, r5, 1
+        jmp  GX_TL
+GX_RET: ret
+
+; tones_fx for subband S_SB of channel S_CH
+TONESYN:
+        ld   r2, S_SB
+        ld   r6, S_CH
+        ld   r3, PRVB
+        call TADDR
+        st   r1, S_NOW
+        mov  r12, r1
+        ld   r3, CURB
+        call TADDR
+        st   r1, S_NXT
+        mov  r13, r1
+        ; the current envelope of this frame's record (cn), from both pending envelopes
+        li   r4, 0                  ; cn.hs
+        li   r5, 0                  ; cn.start
+        ld   r8, T_PHS[r13]
+        beqi r8, 0, TS_S2
+        ld   r8, T_PST[r13]
+        ld   r9, T_PSP[r13]
+        bge  r8, r9, TS_S2
+        li   r4, 1
+        addi r5, r8, 32
+        jmp  TS_S3
+TS_S2:  ld   r8, T_PHS[r12]
+        beqi r8, 0, TS_S3
+        li   r4, 1
+        ld   r5, T_PST[r12]
+TS_S3:  st   r4, T_CHS[r13]
+        st   r5, T_CST[r13]
+        li   r4, 0                  ; cn.hst
+        li   r8, 64                 ; cn.stop
+        ld   r9, T_PHT[r12]
+        beqi r9, 0, TS_P2
+        ld   r9, T_PSP[r12]
+        blt  r9, r5, TS_P2
+        li   r4, 1
+        mov  r8, r9
+        jmp  TS_P3
+TS_P2:  ld   r9, T_PHT[r13]
+        beqi r9, 0, TS_P3
+        li   r4, 1
+        ld   r8, T_PSP[r13]
+        addi r8, r8, 32
+TS_P3:  st   r4, T_CHT[r13]
+        st   r8, T_CSP[r13]
+        ld   r9, T_CSP[r12]         ; reg1 visible if the previous stop >= 32
+        slti r9, r9, 32
+        xori r9, r9, 1
+        st   r9, S_R1NZ
+        slti r9, r5, 32             ; reg2 visible if this start < 32
+        st   r9, S_R2NZ
+        li   r8, 0
+        vop  rclr
+        li   r8, 1
+        vop  rclr
+        ld   r12, S_NOW             ; region 0: the previous frame's waves, offset 128
+        ld   r9, T_NW[r12]
+        beqi r9, 0, TS_REG2
+        ld   r9, S_R1NZ
+        beqi r9, 0, TS_REG2
+        li   r1, 0
+        ld   r2, PRVB
+        call WAVESRUN
+        ld   r12, S_NOW
+        ld   r2, S_SB
+        ld   r3, PRVB
+        add  r3, r3, r2
+        ld   r9, B_INV[r3]
+        ld   r3, S_CH
+        and  r9, r9, r3
+        li   r8, 0
+        vop  rsat
+        ld   r12, S_NOW
+        li   r1, 0
+        li   r3, 128
+        call ENVAPPLY
+TS_REG2: ld  r13, S_NXT             ; region 1: this frame's waves, offset 0
+        ld   r9, T_NW[r13]
+        beqi r9, 0, TS_WIN
+        ld   r9, S_R2NZ
+        beqi r9, 0, TS_WIN
+        mov  r12, r13
+        li   r1, 1
+        ld   r2, CURB
+        call WAVESRUN
+        ld   r2, S_SB
+        ld   r3, CURB
+        add  r3, r3, r2
+        ld   r9, B_INV[r3]
+        ld   r3, S_CH
+        and  r9, r9, r3
+        li   r8, 1
+        vop  rsat
+        ld   r12, S_NXT
+        li   r1, 1
+        li   r3, 0
+        call ENVAPPLY
+TS_WIN: ld   r12, S_NOW             ; the overlap windows
+        ld   r13, S_NXT
+        ld   r4, T_NW[r12]
+        ld   r5, T_NW[r13]
+        sne  r4, r4, r0
+        sne  r5, r5, r0
+        ld   r6, S_R1NZ
+        ld   r7, S_R2NZ
+        and  r8, r4, r5
+        and  r8, r8, r6
+        and  r8, r8, r7
+        mov  r14, r8                ; w1
+        mov  r15, r8                ; w2
+        bnei r8, 0, TS_W1
+        ld   r9, T_CHT[r12]         ; w1 = now.nw and not now.curr.has_stop
+        seq  r9, r9, r0
+        and  r14, r4, r9
+        ld   r9, T_CHS[r13]         ; w2 = next.nw and not cn.has_start
+        seq  r9, r9, r0
+        and  r15, r5, r9
+TS_W1:  beqi r14, 0, TS_W2
+        li   r8, 0
+        li   r9, 0
+        li   r10, 128
+        li   r11, 128
+        li   r12, 1
+        vop  rwin
+TS_W2:  beqi r15, 0, TS_ADD
+        li   r8, 1
+        li   r9, 0
+        li   r10, 128
+        li   r11, 0
+        li   r12, 1
+        vop  rwin
+TS_ADD: ld   r8, S_SB
+        shli r8, r8, 7
+        vop  addt
+        ret
+
+; the waves of record r12 (bank base r2) into region r1, offset r3 (128 or 0)
+WAVESRUN:
+        st   r1, S_ERG
+        ld   r4, T_NW[r12]
+        ld   r5, T_SI[r12]
+        li   r6, 128                ; the region offset: 128 for region 0, 0 for region 1
+        beqi r1, 0, WR_O
+        li   r6, 0
+WR_O:   li   r7, 0
+WR_L:   bge  r7, r4, WR_R
+        add  r3, r5, r7
+        shli r3, r3, 1
+        add  r3, r3, r2
+        ld   r9, B_WAVES[r3]
+        andi r9, r9, 0x3FF          ; freq
+        ld   r10, B_WAVES[r3]
+        shri r10, r10, 10
+        andi r10, r10, 31           ; phase
+        ld   r11, B_WAVES+1[r3]     ; amp_sf
+        ld   r8, S_ERG
+        mov  r12, r6
+        vop  wave
+        addi r7, r7, 1
+        jmp  WR_L
+WR_R:   ret
+
+; waves_fx's envelope: record r12 (its curr fields), region r1, offset r3
+ENVAPPLY:
+        st   r1, S_ERG
+        st   r3, S_EOF
+        ld   r4, T_CHS[r12]
+        st   r4, S_EHS
+        ld   r4, T_CST[r12]
+        st   r4, S_EST
+        ld   r4, T_CHT[r12]
+        st   r4, S_EHT
+        ld   r4, T_CSP[r12]
+        st   r4, S_ESP
+        ld   r4, S_EHS              ; a start point: zero before it, a 4-sample Hann ramp
+        beqi r4, 0, EA_STOP
+        ld   r5, S_EST
+        shli r5, r5, 2
+        ld   r3, S_EOF
+        sub  r5, r5, r3             ; pos
+        blti r5, 1, EA_STOP
+        li   r6, 128
+        blt  r6, r5, EA_STOP
+        ld   r8, S_ERG
+        li   r9, 0
+        mov  r10, r5
+        vop  rzero
+        ld   r4, S_EHT
+        beqi r4, 0, EA_SRAMP
+        ld   r4, S_EST
+        ld   r6, S_ESP
+        beq  r4, r6, EA_STOP
+EA_SRAMP: ld r8, S_ERG
+        mov  r9, r5
+        li   r10, 128
+        sub  r10, r10, r5
+        li   r6, 4
+        min  r10, r10, r6
+        li   r11, 0
+        li   r12, 32
+        vop  rwin
+EA_STOP: ld  r4, S_EHT              ; a stop point: a 4-sample Hann ramp, zero after it
+        beqi r4, 0, EA_RET
+        ld   r5, S_ESP
+        addi r5, r5, 1
+        shli r5, r5, 2
+        ld   r3, S_EOF
+        sub  r5, r5, r3
+        blti r5, 1, EA_RET
+        li   r6, 128
+        blt  r6, r5, EA_RET
+        ld   r8, S_ERG
+        addi r9, r5, -4
+        li   r10, 4
+        li   r11, 96
+        li   r12, -32
+        vop  rwin
+        ld   r8, S_ERG
+        mov  r9, r5
+        li   r10, 128
+        sub  r10, r10, r5
+        vop  rzero
+EA_RET: ret

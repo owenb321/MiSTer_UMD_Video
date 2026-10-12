@@ -1,0 +1,32 @@
+name: Playlist, chapters or titles
+description: The wrong title plays, chapters are wrong, seeking lands in the wrong place
+labels: ["bug", "area:navigation"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      description: The OSD About line, e.g. `UMD v0.1.0 261001`
+    validations:
+      required: true
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Which title or chapter you expected, and what played instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work in an earlier version?
+      options:
+        - "Don't know / never tried it before"
+        - "No — this is the first version I have tried"
+        - "Yes — it worked in an earlier version"

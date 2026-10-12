@@ -1,0 +1,488 @@
+; at3p_gain.uasm -- gain-control parsing (at3p_ref.decode_gainc_*; included by at3p.uasm).
+; A gain record (16 per channel per bank): word 0 = num_points, words 1..7 = one point
+; each, lev | loc << 4. r14 = this channel's records (current bank), r15 = the master's.
+; Only num_points is cleared each frame: nothing reads a point past num_points
+; (checked against every coding mode; docs/at3p_decoder.md S3.2).
+
+; decode_gainc_data for channel r6 / r7
+GAINC:  ld   r14, CURB
+        addi r14, r14, B_GAIN
+        mov  r15, r14
+        shli r1, r6, 7
+        add  r14, r14, r1
+        li   r1, 0                  ; num_points = 0 in all 16 subbands
+GC_CLR: shli r2, r1, 3
+        st   r0, 0[r14+r2]
+        addi r1, r1, 1
+        blti r1, 16, GC_CLR
+        get  r1, 1
+        bnei r1, 0, GC_ON
+        st   r0, NGS[r7]
+        ret
+GC_ON:  get  r1, 4
+        addi r1, r1, 1
+        st   r1, S_C                ; coded_subbands
+        mov  r2, r1
+        get  r3, 1
+        beqi r3, 0, GC_NGS
+        get  r2, 4
+        addi r2, r2, 1
+GC_NGS: st   r2, NGS[r7]
+        call GC_NP
+        call GC_LEV
+        call GC_LOC
+        ld   r1, S_C                ; replicate the last coded subband upwards
+        ld   r2, NGS[r7]
+GC_REP: bge  r1, r2, GC_RET
+        shli r3, r1, 3
+        add  r3, r3, r14
+        li   r4, 0
+GC_RW:  ld   r5, -8[r3+r4]
+        st   r5, 0[r3+r4]
+        addi r4, r4, 1
+        blti r4, 8, GC_RW
+        addi r1, r1, 1
+        jmp  GC_REP
+GC_RET: ret
+
+; decode_gainc_npoints
+GC_NP:  ld   r2, S_C
+        get  r1, 2
+        li   r8, 0
+        beqi r1, 0, GNP0
+        beqi r1, 1, GNP1
+        beqi r1, 2, GNP2
+        bnei r6, 0, GNP3S
+        get  r4, 2                  ; mode 3 master: min + delta
+        get  r5, 3
+GNP3L:  bge  r8, r2, GNP_R
+        getr r9, r4
+        add  r9, r9, r5
+        bgei r9, 8, GNP_ERR
+        shli r10, r8, 3
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP3L
+GNP3S:  bge  r8, r2, GNP_R          ; mode 3 slave: copy the master
+        shli r10, r8, 3
+        ld   r9, 0[r15+r10]
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP3S
+GNP0:   bge  r8, r2, GNP_R
+        get  r9, 3
+        shli r10, r8, 3
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP0
+GNP1:   bge  r8, r2, GNP_R
+        vlc  r9, VLC_GAIN+0
+        shli r10, r8, 3
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP1
+GNP2:   bnei r6, 0, GNP2S
+        vlc  r9, VLC_GAIN+0         ; master: modulo delta to the previous subband
+        st   r9, 0[r14]
+        li   r8, 1
+GNP2ML: bge  r8, r2, GNP_R
+        vlc  r9, VLC_GAIN+1
+        shli r10, r8, 3
+        ld   r11, -8[r14+r10]
+        add  r9, r9, r11
+        andi r9, r9, 7
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP2ML
+GNP2S:  bge  r8, r2, GNP_R          ; slave: modulo delta to the master
+        vlc  r9, VLC_GAIN+1
+        shli r10, r8, 3
+        ld   r11, 0[r15+r10]
+        add  r9, r9, r11
+        andi r9, r9, 7
+        st   r9, 0[r14+r10]
+        addi r8, r8, 1
+        jmp  GNP2S
+GNP_R:  ret
+GNP_ERR: err E_GAIN_NPOINTS
+
+; set lev[r10] = r5 of the record at r3 (keeps loc); clobbers r9
+GLV_SET: ld  r9, 1[r3+r10]
+        andi r9, r9, 0x1F0
+        or   r9, r9, r5
+        st   r9, 1[r3+r10]
+        ret
+; gainc_level_mode1m: r3 = record
+GL_M1M: ld   r4, 0[r3]
+        beqi r4, 0, GL_M1R
+        vlc  r5, VLC_GAIN+2
+        andi r5, r5, 15
+        li   r10, 0
+        call GLV_SET
+        li   r10, 1
+GL_M1L: bge  r10, r4, GL_M1R
+        vlc  r11, VLC_GAIN+3
+        add  r5, r5, r11
+        andi r5, r5, 15
+        call GLV_SET
+        addi r10, r10, 1
+        jmp  GL_M1L
+GL_M1R: ret
+; gainc_level_mode3s: r3 = record, r12 = the reference record (7 past its points)
+GL_M3S: ld   r4, 0[r3]
+        ld   r13, 0[r12]
+        li   r10, 0
+GL_M3L: bge  r10, r4, GL_M3R
+        li   r5, 7
+        bge  r10, r13, GL_M3W
+        ld   r5, 1[r12+r10]
+        andi r5, r5, 15
+GL_M3W: call GLV_SET
+        addi r10, r10, 1
+        jmp  GL_M3L
+GL_M3R: ret
+
+; decode_gainc_levels
+GC_LEV: get  r1, 2
+        st   r1, S_D
+        bnei r1, 3, GLV_GO
+        bnei r6, 0, GLV_GO
+        get  r4, 2                  ; mode 3 master: delta bits and min, once
+        st   r4, S_E
+        get  r4, 4
+        st   r4, S_F
+GLV_GO: li   r8, 0
+GLV_SB: ld   r2, S_C
+        bge  r8, r2, GLV_R
+        st   r8, S_SB
+        shli r3, r8, 3
+        add  r12, r3, r15           ; the master's record for this subband
+        add  r3, r3, r14            ; this channel's
+        ld   r1, S_D
+        beqi r1, 0, GLV0
+        beqi r1, 1, GLV1
+        beqi r1, 2, GLV2
+        bnei r6, 0, GLV3S
+        ld   r4, 0[r3]              ; mode 3 master: min + delta
+        li   r10, 0
+GLV3L:  bge  r10, r4, GLV_NX
+        ld   r11, S_E
+        getr r5, r11
+        ld   r11, S_F
+        add  r5, r5, r11
+        bgei r5, 16, GLV_ERR
+        call GLV_SET
+        addi r10, r10, 1
+        jmp  GLV3L
+GLV3S:  call GL_M3S                 ; mode 3 slave: clone the master
+        jmp  GLV_NX
+GLV0:   ld   r4, 0[r3]              ; mode 0: 4 bits each
+        li   r10, 0
+GLV0L:  bge  r10, r4, GLV_NX
+        get  r5, 4
+        call GLV_SET
+        addi r10, r10, 1
+        jmp  GLV0L
+GLV1:   bnei r6, 0, GLV1S
+        call GL_M1M                 ; master: VLC modulo delta to the previous point
+        jmp  GLV_NX
+GLV1S:  ld   r4, 0[r3]              ; slave: VLC modulo delta to the master's point
+        ld   r13, 0[r12]
+        li   r10, 0
+GLV1SL: bge  r10, r4, GLV_NX
+        vlc  r11, VLC_GAIN+5
+        li   r5, 7
+        bge  r10, r13, GLV1SP
+        ld   r5, 1[r12+r10]
+        andi r5, r5, 15
+GLV1SP: add  r5, r5, r11
+        andi r5, r5, 15
+        call GLV_SET
+        addi r10, r10, 1
+        jmp  GLV1SL
+GLV2:   bnei r6, 0, GLV2S
+        bnei r8, 0, GLV2MP
+        call GL_M1M                 ; master, subband 0: mode 1m
+        jmp  GLV_NX
+GLV2MP: ld   r4, 0[r3]              ; master: modulo delta to the previous subband's point
+        ld   r13, -8[r3]
+        li   r10, 0
+GLV2ML: bge  r10, r4, GLV_NX
+        vlc  r11, VLC_GAIN+4
+        li   r5, 7
+        bge  r10, r13, GLV2MQ
+        ld   r5, -7[r3+r10]
+        andi r5, r5, 15
+GLV2MQ: add  r5, r5, r11
+        andi r5, r5, 15
+        call GLV_SET
+        addi r10, r10, 1
+        jmp  GLV2ML
+GLV2S:  ld   r4, 0[r3]              ; slave: a flag chooses mode 1m or a clone
+        beqi r4, 0, GLV_NX
+        get  r5, 1
+        beqi r5, 0, GLV2SC
+        call GL_M1M
+        jmp  GLV_NX
+GLV2SC: call GL_M3S
+GLV_NX: ld   r8, S_SB
+        addi r8, r8, 1
+        jmp  GLV_SB
+GLV_R:  ret
+GLV_ERR: err E_GAIN_LEVEL
+
+; set loc[r10] = r5 of the record at r3 (keeps lev); r5 kept; clobbers r9
+GLC_SET: ld  r9, 1[r3+r10]
+        andi r9, r9, 15
+        shli r5, r5, 4
+        or   r9, r9, r5
+        st   r9, 1[r3+r10]
+        sar  r5, r5, 4
+        ret
+; gainc_loc_mode0: loc[r10] from loc[r10 - 1]; clobbers r5 r9 r11
+GLC_M0: beqi r10, 0, GLC0D
+        ld   r5, 0[r3+r10]          ; point r10 - 1 is at word r10
+        shri r5, r5, 4
+        blti r5, 15, GLC0D
+        bgei r5, 30, GLC0M
+        li   r11, 30
+        sub  r11, r11, r5
+        log2 r11, r11
+        addi r11, r11, 1
+        getr r11, r11
+        add  r5, r5, r11
+        addi r5, r5, 1
+        jmp  GLC_SET
+GLC0M:  li   r5, 31
+        jmp  GLC_SET
+GLC0D:  get  r5, 5
+        jmp  GLC_SET
+; gainc_loc_mode1: r3 = record
+GLC_M1: ld   r4, 0[r3]
+        beqi r4, 0, GLC1R
+        get  r5, 5
+        li   r10, 0
+        call GLC_SET
+        li   r10, 1
+GLC1L:  bge  r10, r4, GLC1R
+        ld   r11, 1[r3+r10]         ; lev[i]
+        andi r11, r11, 15
+        ld   r13, 0[r3+r10]         ; point i - 1
+        andi r9, r13, 15
+        shri r13, r13, 4
+        blt  r9, r11, GLC1UP
+        vlc  r5, VLC_GAIN+7
+        jmp  GLC1W
+GLC1UP: vlc  r5, VLC_GAIN+9
+GLC1W:  add  r5, r5, r13
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLC1L
+GLC1R:  ret
+
+; decode_gainc_loc_codes
+GC_LOC: get  r1, 2
+        st   r1, S_D
+        li   r8, 0
+        beqi r1, 3, GLC3
+GLC_SB: ld   r2, S_C
+        bge  r8, r2, GLC_VAL
+        st   r8, S_SB
+        shli r3, r8, 3
+        add  r12, r3, r15
+        add  r3, r3, r14
+        ld   r1, S_D
+        beqi r1, 0, GLCM0
+        beqi r1, 1, GLCM1
+        jmp  GLCM2
+GLCM0:  li   r10, 0                 ; mode 0: ascending, direct
+GLCM0L: ld   r4, 0[r3]
+        bge  r10, r4, GLC_NX
+        call GLC_M0
+        addi r10, r10, 1
+        jmp  GLCM0L
+GLCM1:  bnei r6, 0, GLCM1S
+        call GLC_M1                 ; master: VLC delta to the previous point
+        jmp  GLC_NX
+GLCM1S: ld   r4, 0[r3]              ; slave
+        beqi r4, 0, GLC_NX
+        vlc  r5, VLC_GAIN+10        ; point 0: modulo delta to the master's point 0
+        ld   r13, 0[r12]
+        li   r11, 0
+        beqi r13, 0, GLCM1S0
+        ld   r11, 1[r12]
+        shri r11, r11, 4
+GLCM1S0: add r5, r5, r11
+        andi r5, r5, 0x1F
+        li   r10, 0
+        call GLC_SET
+        li   r10, 1
+GLCM1SL: ld  r4, 0[r3]
+        bge  r10, r4, GLC_NX
+        ld   r13, 0[r12]            ; r1 = more_than_ref = i >= the master's num_points
+        slt  r1, r10, r13
+        xori r1, r1, 1
+        ld   r11, 1[r3+r10]         ; ascending if lev[i] > lev[i - 1]
+        andi r11, r11, 15
+        ld   r9, 0[r3+r10]
+        andi r9, r9, 15
+        bge  r9, r11, GLCM1SD
+        beqi r1, 0, GLCM1SA
+        vlc  r5, VLC_GAIN+9         ; ascending past the master: delta to the previous point
+        ld   r9, 0[r3+r10]
+        shri r9, r9, 4
+        add  r5, r5, r9
+        call GLC_SET
+        jmp  GLCM1SN
+GLCM1SA: get r5, 1                  ; ascending inside the master: direct or clone
+        beqi r5, 0, GLCM1SC
+        call GLC_M0
+        jmp  GLCM1SN
+GLCM1SC: ld  r5, 1[r12+r10]
+        shri r5, r5, 4
+        call GLC_SET
+        jmp  GLCM1SN
+GLCM1SD: beqi r1, 0, GLCM1SR        ; descending
+        vlc  r5, VLC_GAIN+7
+        ld   r9, 0[r3+r10]
+        shri r9, r9, 4
+        add  r5, r5, r9
+        call GLC_SET
+        jmp  GLCM1SN
+GLCM1SR: vlc r5, VLC_GAIN+10
+        ld   r9, 1[r12+r10]
+        shri r9, r9, 4
+        add  r5, r5, r9
+        andi r5, r5, 0x1F
+        call GLC_SET
+GLCM1SN: addi r10, r10, 1
+        jmp  GLCM1SL
+GLCM2:  bnei r6, 0, GLCM2S
+        bnei r8, 0, GLCM2P
+        li   r10, 0                 ; master, subband 0: mode 0
+GLCM20: ld   r4, 0[r3]
+        bge  r10, r4, GLC_NX
+        call GLC_M0
+        addi r10, r10, 1
+        jmp  GLCM20
+GLCM2P: ld   r4, 0[r3]              ; master: delta to the previous subband's points
+        beqi r4, 0, GLC_NX
+        vlc  r5, VLC_GAIN+6
+        ld   r13, -8[r3]
+        li   r11, 0
+        beqi r13, 0, GLCM2P0
+        ld   r11, -7[r3]
+        shri r11, r11, 4
+GLCM2P0: add r5, r5, r11
+        andi r5, r5, 0x1F
+        li   r10, 0
+        call GLC_SET
+        li   r10, 1
+GLCM2PL: ld  r4, 0[r3]
+        bge  r10, r4, GLC_NX
+        ld   r13, -8[r3]            ; r1 = more_than_ref (the previous subband)
+        slt  r1, r10, r13
+        xori r1, r1, 1
+        ld   r11, 1[r3+r10]
+        andi r11, r11, 15
+        ld   r9, 0[r3+r10]
+        andi r9, r9, 15
+        slt  r9, r9, r11            ; ascending
+        shli r9, r9, 1
+        add  r9, r9, r1
+        vlc  r5, VLC_GAIN+6[r9]
+        beqi r1, 0, GLCM2PR
+        ld   r9, 0[r3+r10]
+        shri r9, r9, 4
+        add  r5, r5, r9
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLCM2PL
+GLCM2PR: ld  r9, -7[r3+r10]
+        shri r9, r9, 4
+        add  r5, r5, r9
+        andi r5, r5, 0x1F
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLCM2PL
+GLCM2S: ld   r4, 0[r3]              ; slave: mode 1, or a clone of the master
+        beqi r4, 0, GLC_NX
+        ld   r13, 0[r12]
+        blt  r13, r4, GLCM2S1
+        get  r5, 1
+        bnei r5, 0, GLCM2S1
+        li   r10, 0
+GLCM2SC: bge r10, r4, GLC_NX
+        ld   r5, 1[r12+r10]
+        shri r5, r5, 4
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLCM2SC
+GLCM2S1: call GLC_M1
+GLC_NX: ld   r8, S_SB
+        addi r8, r8, 1
+        jmp  GLC_SB
+GLC3:   bnei r6, 0, GLC3S           ; mode 3 master: min + i + delta
+        get  r4, 2
+        addi r4, r4, 1
+        st   r4, S_E
+        get  r4, 5
+        st   r4, S_F
+GLC3ML: ld   r2, S_C
+        bge  r8, r2, GLC_VAL
+        shli r3, r8, 3
+        add  r3, r3, r14
+        li   r10, 0
+GLC3MP: ld   r4, 0[r3]
+        bge  r10, r4, GLC3MN
+        ld   r11, S_E
+        getr r5, r11
+        ld   r11, S_F
+        add  r5, r5, r11
+        add  r5, r5, r10
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLC3MP
+GLC3MN: addi r8, r8, 1
+        jmp  GLC3ML
+GLC3S:  ld   r2, S_C                ; mode 3 slave: clone; direct past the master
+        bge  r8, r2, GLC_VAL
+        shli r3, r8, 3
+        add  r12, r3, r15
+        add  r3, r3, r14
+        li   r10, 0
+GLC3SP: ld   r4, 0[r3]
+        bge  r10, r4, GLC3SN
+        ld   r13, 0[r12]
+        bge  r10, r13, GLC3SD
+        ld   r5, 1[r12+r10]
+        shri r5, r5, 4
+        call GLC_SET
+        addi r10, r10, 1
+        jmp  GLC3SP
+GLC3SD: call GLC_M0
+        addi r10, r10, 1
+        jmp  GLC3SP
+GLC3SN: addi r8, r8, 1
+        jmp  GLC3S
+GLC_VAL: li  r8, 0                  ; every location 0..31, strictly ascending
+GLCV_SB: ld  r2, S_C
+        bge  r8, r2, GLCV_R
+        shli r3, r8, 3
+        add  r3, r3, r14
+        ld   r4, 0[r3]
+        li   r10, 0
+        li   r13, -1
+GLCV_P: bge  r10, r4, GLCV_N
+        ld   r5, 1[r3+r10]
+        sar  r5, r5, 4
+        blti r5, 0, GLCV_E
+        bgei r5, 32, GLCV_E
+        bge  r13, r5, GLCV_E
+        mov  r13, r5
+        addi r10, r10, 1
+        jmp  GLCV_P
+GLCV_N: addi r8, r8, 1
+        jmp  GLCV_SB
+GLCV_R: ret
+GLCV_E: err  E_GAIN_LOC

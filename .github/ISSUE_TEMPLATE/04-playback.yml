@@ -1,0 +1,64 @@
+name: Picture or sound during playback
+description: Stutter, artefacts, wrong colours, lip sync, subtitles
+labels: ["bug", "area:playback"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: UMD v0.1.0 261001
+    validations:
+      required: true
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      options:
+        - Stutter or judder
+        - Lip sync — audio and video out of step
+        - Artefacts, blockiness, or tearing
+        - Wrong colours
+        - Subtitles
+        - Picture geometry — stretched, squashed, cropped
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: output
+    attributes:
+      label: Which output are you watching?
+      options:
+        - HDMI
+        - Analog — CRT
+        - Analog — other display
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    id: onset
+    attributes:
+      label: When does it happen?
+      options:
+        - From the moment it starts playing
+        - Only after playing for a while
+        - Only after seeking or a chapter skip
+        - At one specific point in the film
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Describe it
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Photo or video
+      description: For lip sync, a phone video with sound is worth far more than a description.

@@ -1,0 +1,45 @@
+name: An image will not load
+description: Black screen, nothing happens, UNSUPPORTED IMAGE
+labels: ["bug", "area:loading"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A network share mounted read-only fails silently** — the framework opens images
+        read-write. Check that first.
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: UMD v0.1.0 261001
+    validations:
+      required: true
+  - type: dropdown
+    id: message
+    attributes:
+      label: What appears on screen?
+      options:
+        - Nothing — black screen, no message
+        - The idle screen stays, as if nothing was loaded
+        - "`UNSUPPORTED IMAGE`"
+        - Something else (describe below)
+    validations:
+      required: true
+  - type: input
+    id: ripped
+    attributes:
+      label: How was the image made?
+  - type: dropdown
+    id: media
+    attributes:
+      label: Where does the file live?
+      options:
+        - SD card
+        - USB storage
+        - Network share (CIFS/SMB or NFS)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: Anything else

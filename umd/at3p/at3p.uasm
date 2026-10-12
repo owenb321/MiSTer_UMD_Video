@@ -1,0 +1,919 @@
+; at3p.uasm -- the ATRAC3plus decoder's microcode (docs/at3p_decoder.md S3.4).
+; Assembled by tools/at3p_isa.py into umd/at3p/at3p_ucode.mem; the emulator there is
+; its executable definition. Each routine mirrors the tools/at3p_ref.py function named in
+; its header (ffmpeg's of the same name), stale-state behaviour included.
+;
+; Registers: r0 = 0. r6 = ch_num and r7 = ch * 0x80 inside the per-channel parse
+; routines (callers set them, callees keep them). r8..r15 are the vector ops' arguments.
+; Loop counters that must survive a call live in the scratch words (S_*).
+
+; ---------------------------------------------------------------- the record RAM
+.equ WL      0x00          ; per channel (ch * 0x80): word lengths [32]
+.equ SF      0x20          ; scale-factor indices [32]
+.equ TAB     0x40          ; code-table indices [32]
+.equ PWR     0x60          ; power-compensation levels [5]
+.equ FILL    0x70
+.equ NCV     0x71          ; num_coded_vals
+.equ SPLIT   0x72
+.equ TTYPE   0x73          ; table_type
+.equ NGS     0x74          ; num_gain_subbands
+.equ U_NQU   0x100
+.equ U_MUTE  0x101
+.equ U_USED  0x102
+.equ U_NSB   0x103
+.equ U_NCSB  0x104
+.equ U_FULL  0x105
+.equ U_NOISE 0x106
+.equ U_NLEV  0x107
+.equ U_NTAB  0x108
+.equ U_TYPE  0x109
+.equ U_RESYNC 0x10A        ; AU header resyncs (a counter the host reads)
+.equ U_UNITS 0x10B         ; channel units decoded in this frame
+.equ SWAP    0x110         ; [16]
+.equ NEG     0x120         ; [16]
+.equ COPY    0x130         ; [32] ch1's spectrum of this unit is ch0's
+.equ REFW    0x150         ; [48] decode_tones_amplitude's refwaves
+.equ BHT     0x180         ; [16] band_has_tones
+.equ SBRNG   0x190         ; [16] the noise start index per subband
+.equ S_A     0x1A0         ; scratch
+.equ S_B     0x1A1
+.equ S_C     0x1A2
+.equ S_D     0x1A3
+.equ S_E     0x1A4
+.equ S_F     0x1A5
+.equ S_G     0x1A6
+.equ S_H     0x1A7
+.equ S_WIDX  0x1A8
+.equ S_CH    0x1A9
+.equ S_SB    0x1AA
+.equ S_QU    0x1AB
+.equ S_I     0x1AC
+.equ S_J     0x1AD
+.equ S_K     0x1AE
+.equ CURB    0x1F0         ; the current bank's base
+.equ PRVB    0x1F1         ; the previous bank's base
+.equ BANK0   0x200
+.equ BANK1   0x500
+; bank-relative (current = CURB, previous = PRVB)
+.equ B_WND   0x000         ; [ch * 16 + sb]
+.equ B_GAIN  0x020         ; [ch * 0x80 + sb * 8]: np, then (lev | loc << 4) per point
+.equ B_TONE  0x120         ; [ch * 160 + sb * 10]: pend hs start hst stop, curr hs start hst stop, nw, si
+.equ B_TP    0x260         ; tones_present
+.equ B_AM    0x261         ; amplitude_mode
+.equ B_NTB   0x262         ; num_tone_bands
+.equ B_TIDX  0x263         ; tones_index
+.equ B_SHARE 0x270         ; [16]
+.equ B_MAST  0x280         ; [16]
+.equ B_INV   0x290         ; [16]
+.equ B_WAVES 0x2A0         ; [48 * 2]: freq | phase << 10, amp_sf
+; tone record fields
+.equ T_PHS 0
+.equ T_PST 1
+.equ T_PHT 2
+.equ T_PSP 3
+.equ T_CHS 4
+.equ T_CST 5
+.equ T_CHT 6
+.equ T_CSP 7
+.equ T_NW  8
+.equ T_SI  9
+; error codes (the model's At3pError names)
+.equ E_START_BIT         1
+.equ E_CH_UNIT_EXTENSION 2
+.equ E_CH_CONFIG         3
+.equ E_NUM_QU            4
+.equ E_WL_NUM_CODED      5
+.equ E_WL_MODE1_POS      6
+.equ E_WL_RANGE          7
+.equ E_SF_MODE1_PARAMS   8
+.equ E_SF_RANGE          9
+.equ E_CT_NUM            10
+.equ E_GAIN_NPOINTS      11
+.equ E_GAIN_LEVEL        12
+.equ E_GAIN_LOC          13
+.equ E_TONES_MAX         14
+.equ E_GHA_AMP_MODE0     15
+.equ E_RATE              16     ; the AU header: not 48 kHz
+.equ E_CHANNELS          17     ; the AU header: not stereo
+.equ E_VLC_HOLE          18     ; a Huffman code in no codebook (raised by the VLC unit)
+; marks (snapshots for the emulator and the benches)
+.equ M_PARSED 1
+.equ M_FRAME  2
+
+; ================================================================ the AU loop
+RESET:  li   r1, BANK0
+        st   r1, CURB
+        li   r1, BANK1
+        st   r1, PRVB
+AU:     get  r1, 16
+AU_SYN: li   r2, 0x0FD0
+        beq  r1, r2, AU_HDR
+        ld   r3, U_RESYNC           ; slide one byte and look again (counted)
+        addi r3, r3, 1
+        st   r3, U_RESYNC
+        andi r1, r1, 0xFF
+        shli r1, r1, 8
+        get  r3, 8
+        or   r1, r1, r3
+        jmp  AU_SYN
+AU_HDR: get  r3, 16                 ; params
+        get  r4, 16                 ; 4 bytes, zero on every disc
+        get  r4, 16
+        andi r6, r3, 0x3FF
+        shli r6, r6, 3
+        addi r6, r6, 8              ; frame bytes
+        frame r6
+        shri r5, r3, 13
+        andi r5, r5, 7
+        bnei r5, 2, ER_RATE
+        shri r5, r3, 10
+        andi r5, r5, 7
+        bnei r5, 2, ER_CHAN
+        get  r1, 1
+        bnei r1, 0, ER_START
+        st   r0, U_UNITS
+UNITS:  bleft r1
+        blti r1, 2, UNITS_DONE
+        get  r2, 2
+        beqi r2, 3, UNITS_DONE
+        beqi r2, 2, ER_EXT
+        ld   r3, U_UNITS
+        bnei r3, 0, ER_CONFIG
+        bnei r2, 1, ER_CONFIG
+        st   r2, U_TYPE
+        call UNIT
+        li   r3, 1
+        st   r3, U_UNITS
+        jmp  UNITS
+UNITS_DONE:
+        mark M_PARSED
+        fend
+        ld   r3, U_UNITS
+        beqi r3, 0, NO_UNIT
+        call SYNTH
+        ld   r1, CURB               ; the two-frame histories swap
+        ld   r2, PRVB
+        st   r2, CURB
+        st   r1, PRVB
+        mark M_FRAME
+        jmp  AU
+NO_UNIT: vop pcmz
+        mark M_FRAME
+        jmp  AU
+
+ER_RATE:   err E_RATE
+ER_CHAN:   err E_CHANNELS
+ER_START:  err E_START_BIT
+ER_EXT:    err E_CH_UNIT_EXTENSION
+ER_CONFIG: err E_CH_CONFIG
+ERROR:  fend                        ; the frame is refused: drain it, output silence
+        vop  pcmz
+        mark M_FRAME
+        jmp  AU
+
+; ================================================================ decode_channel_unit
+UNIT:   get  r1, 5
+        addi r1, r1, 1
+        st   r1, U_NQU
+        blti r1, 29, U_NQU_OK
+        bgei r1, 32, U_NQU_OK
+        err  E_NUM_QU
+U_NQU_OK:
+        get  r1, 1
+        st   r1, U_MUTE
+        li   r6, 0                  ; word lengths, both channels
+        li   r7, 0
+        call CLR32_WL
+        call WORDLEN
+        mark 10
+        li   r6, 1
+        li   r7, 0x80
+        call CLR32_WL
+        call WORDLEN
+        mark 11
+        ld   r1, U_NQU              ; used_quant_units: the last unit coded in either channel
+        addi r2, r1, -1
+U_USCAN: blti r2, 0, U_USED_W
+        ld   r3, WL[r2]
+        bnei r3, 0, U_USED_W
+        ld   r3, 0x80+WL[r2]
+        bnei r3, 0, U_USED_W
+        addi r2, r2, -1
+        jmp  U_USCAN
+U_USED_W:
+        addi r2, r2, 1
+        st   r2, U_USED
+        ld   r3, C_QU_TO_SUBBAND-1[r1]
+        addi r3, r3, 1
+        st   r3, U_NSB
+        li   r4, 0
+        beqi r2, 0, U_NCSB_W
+        ld   r4, C_QU_TO_SUBBAND-1[r2]
+        addi r4, r4, 1
+U_NCSB_W:
+        st   r4, U_NCSB
+        beqi r2, 0, U_NOSF
+        li   r6, 0                  ; scale factors
+        li   r7, 0
+        call CLR32_SF
+        call SFIDX
+        mark 12
+        li   r6, 1
+        li   r7, 0x80
+        call CLR32_SF
+        call SFIDX
+        mark 13
+        get  r1, 1                  ; code tables
+        st   r1, U_FULL
+        li   r6, 0
+        li   r7, 0
+        call CLR32_TAB
+        call CODETAB
+        mark 14
+        li   r6, 1
+        li   r7, 0x80
+        call CLR32_TAB
+        call CODETAB
+        mark 15
+U_NOSF: call SPECTRUM
+        mark 16
+        li   r1, SWAP               ; stereo: swap / negate flags per coded subband
+        ld   r2, U_NCSB
+        call FLAGS
+        li   r1, NEG
+        ld   r2, U_NCSB
+        call FLAGS
+        ld   r1, CURB               ; window shapes, both channels
+        addi r1, r1, B_WND
+        ld   r2, U_NSB
+        call FLAGS
+        ld   r1, CURB
+        addi r1, r1, B_WND+16
+        ld   r2, U_NSB
+        call FLAGS
+        li   r6, 0                  ; gain control
+        li   r7, 0
+        call GAINC
+        li   r6, 1
+        li   r7, 0x80
+        call GAINC
+        mark 18
+        call TONES
+        mark 19
+        get  r1, 1                  ; global noise (parsed, unused, as in ffmpeg)
+        st   r1, U_NOISE
+        beqi r1, 0, U_DONE
+        get  r1, 4
+        st   r1, U_NLEV
+        get  r1, 4
+        st   r1, U_NTAB
+U_DONE: ret
+
+CLR32_WL:  li  r1, 31
+CLRW_L: st   r0, WL[r7+r1]
+        addi r1, r1, -1
+        bgei r1, 0, CLRW_L
+        ret
+CLR32_SF:  li  r1, 31
+CLRS_L: st   r0, SF[r7+r1]
+        addi r1, r1, -1
+        bgei r1, 0, CLRS_L
+        ret
+CLR32_TAB: li  r1, 31
+CLRT_L: st   r0, TAB[r7+r1]
+        addi r1, r1, -1
+        bgei r1, 0, CLRT_L
+        ret
+
+; get_subband_flags: r1 = address, r2 = n; returns r3 = the first bit
+FLAGS:  li   r4, 0
+FL_CLR: bge  r4, r2, FL_RD
+        st   r0, 0[r1+r4]
+        addi r4, r4, 1
+        jmp  FL_CLR
+FL_RD:  get  r3, 1
+        beqi r3, 0, FL_RET
+        get  r5, 1
+        li   r4, 0
+        beqi r5, 0, FL_ONES
+FL_BIT: bge  r4, r2, FL_RET
+        get  r5, 1
+        st   r5, 0[r1+r4]
+        addi r4, r4, 1
+        jmp  FL_BIT
+FL_ONES: bge r4, r2, FL_RET
+        li   r5, 1
+        st   r5, 0[r1+r4]
+        addi r4, r4, 1
+        jmp  FL_ONES
+FL_RET: ret
+
+; unpack_vq_shape: r1 = start, r2 = shape base address, r3 = destination, r4 = n
+VQ:     beqi r4, 0, VQ_RET
+        st   r1, 0[r3]
+        st   r1, 1[r3]
+        st   r1, 2[r3]
+        li   r5, 3
+VQ_L:   bge  r5, r4, VQ_RET
+        ld   r8, C_QU_NUM_TO_SEG[r5]
+        add  r8, r8, r2
+        ld   r8, -1[r8]
+        sub  r8, r1, r8
+        st   r8, 0[r3+r5]
+        addi r5, r5, 1
+        jmp  VQ_L
+VQ_RET: ret
+
+; ================================================================ word lengths
+; num_coded_units: -> NCV, FILL, SPLIT of channel r7
+NCU:    get  r1, 2
+        st   r1, FILL[r7]
+        ld   r2, U_NQU
+        beqi r1, 0, NCU_ALL
+        get  r3, 5
+        blt  r2, r3, NCU_ERR
+        st   r3, NCV[r7]
+        bnei r1, 3, NCU_RET
+        get  r4, 2
+        shli r5, r6, 1
+        add  r4, r4, r5
+        addi r4, r4, 1
+        st   r4, SPLIT[r7]
+NCU_RET: ret
+NCU_ALL: st  r2, NCV[r7]
+        ret
+NCU_ERR: err E_WL_NUM_CODED
+
+; decode_channel_wordlen (r6 = ch, r7 = ch * 0x80)
+WORDLEN:
+        st   r0, FILL[r7]
+        st   r0, S_WIDX
+        get  r1, 2
+        beqi r1, 0, WL_M0
+        beqi r1, 1, WL_M1
+        beqi r1, 2, WL_M2
+        jmp  WL_M3
+WL_M0:  ld   r2, U_NQU
+        li   r3, 0
+WL_M0L: bge  r3, r2, WL_FILL
+        get  r4, 3
+        st   r4, WL[r7+r3]
+        addi r3, r3, 1
+        jmp  WL_M0L
+WL_M1:  bnei r6, 0, WL_M1S
+        get  r1, 2                  ; master: weights, then a split into direct and min+delta
+        st   r1, S_WIDX
+        call NCU
+        ld   r2, NCV[r7]
+        beqi r2, 0, WL_FILL
+        get  r3, 5                  ; pos
+        blt  r2, r3, WL_M1ERR
+        get  r4, 2                  ; delta_bits
+        get  r5, 3                  ; min_val
+        li   r8, 0
+WL_M1D: bge  r8, r3, WL_M1R
+        get  r9, 3
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M1D
+WL_M1R: bge  r8, r2, WL_FILL
+        getr r9, r4
+        add  r9, r9, r5
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M1R
+WL_M1ERR: err E_WL_MODE1_POS
+WL_M1S: call NCU                    ; slave: VLC delta to the master
+        ld   r2, NCV[r7]
+        beqi r2, 0, WL_FILL
+        get  r3, 2
+        li   r8, 0
+WL_M1SL: bge r8, r2, WL_FILL
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL[r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M1SL
+WL_M2:  call NCU
+        ld   r2, NCV[r7]
+        beqi r2, 0, WL_FILL
+        beqi r6, 0, WL_M2M
+        get  r3, 2                  ; slave: delta to the master's slope
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7]
+        li   r8, 1
+WL_M2SL: bge r8, r2, WL_FILL
+        ld   r10, WL[r8]
+        ld   r11, WL-1[r8]
+        sub  r10, r10, r11          ; diff
+        ld   r11, WL-1[r7+r8]
+        add  r10, r10, r11
+        vlc  r9, VLC_WL[r3]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M2SL
+WL_M2M: get  r4, 1                  ; flag
+        st   r4, S_A
+        get  r3, 1                  ; vlc table
+        st   r3, S_B
+        get  r1, 3                  ; start_val
+        get  r5, 4                  ; shape
+        shli r8, r1, 4              ; WL_SHAPES[start][shape] = base + (start * 16 + shape) * 9
+        add  r8, r8, r5
+        shli r9, r8, 3
+        add  r8, r9, r8
+        addi r2, r8, C_WL_SHAPES
+        addi r3, r7, WL
+        ld   r4, NCV[r7]
+        call VQ
+        ld   r2, NCV[r7]
+        ld   r3, S_B
+        ld   r4, S_A
+        li   r8, 0
+        bnei r4, 0, WL_M2P
+WL_M2D: bge  r8, r2, WL_FILL
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M2D
+WL_M2P: andi r5, r2, 0xFFFE         ; pairs, each with a skip flag
+WL_M2PL: bge r8, r5, WL_M2PO
+        get  r4, 1
+        bnei r4, 0, WL_M2PN
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL+1[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL+1[r7+r8]
+WL_M2PN: addi r8, r8, 2
+        jmp  WL_M2PL
+WL_M2PO: andi r4, r2, 1
+        beqi r4, 0, WL_FILL
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        jmp  WL_FILL
+WL_M3:  get  r1, 2
+        st   r1, S_WIDX
+        call NCU
+        ld   r2, NCV[r7]
+        beqi r2, 0, WL_FILL
+        get  r3, 2
+        get  r9, 3
+        st   r9, WL[r7]
+        li   r8, 1
+WL_M3L: bge  r8, r2, WL_FILL
+        vlc  r9, VLC_WL[r3]
+        ld   r10, WL-1[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 7
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_M3L
+WL_FILL: ld  r1, FILL[r7]
+        ld   r2, NCV[r7]
+        ld   r3, U_NQU
+        beqi r1, 2, WL_F2
+        bnei r1, 3, WL_WT
+        ld   r4, SPLIT[r7]          ; fill 3: ones up to the split point
+        sub  r5, r3, r4
+        beqi r6, 0, WL_F3P
+        add  r5, r2, r4
+WL_F3P: blti r5, 32, WL_F3L
+        li   r5, 32
+WL_F3L: bge  r2, r5, WL_WT
+        li   r9, 1
+        st   r9, WL[r7+r2]
+        addi r2, r2, 1
+        jmp  WL_F3L
+WL_F2:  bge  r2, r3, WL_WT          ; fill 2: ones (master) or one bit each (slave)
+        li   r9, 1
+        beqi r6, 0, WL_F2W
+        get  r9, 1
+WL_F2W: st   r9, WL[r7+r2]
+        addi r2, r2, 1
+        jmp  WL_F2
+WL_WT:  ld   r1, S_WIDX
+        beqi r1, 0, WL_RET
+        shli r2, r6, 1              ; weights row (ch * 3 + widx - 1) * 32
+        add  r2, r2, r6
+        add  r2, r2, r1
+        addi r2, r2, -1
+        shli r2, r2, 5
+        addi r2, r2, C_WL_WEIGHTS
+        ld   r3, U_NQU
+        li   r8, 0
+WL_WTL: bge  r8, r3, WL_RET
+        ld   r9, WL[r7+r8]
+        ld   r10, 0[r2+r8]
+        add  r9, r9, r10
+        blti r9, 0, WL_WERR
+        bgei r9, 8, WL_WERR
+        st   r9, WL[r7+r8]
+        addi r8, r8, 1
+        jmp  WL_WTL
+WL_RET: ret
+WL_WERR: err E_WL_RANGE
+
+; ================================================================ scale factors
+; decode_channel_sf_idx (r6, r7)
+SFIDX:  st   r0, S_WIDX
+        ld   r2, U_USED
+        get  r1, 2
+        beqi r1, 0, SF_M0
+        beqi r1, 1, SF_M1
+        beqi r1, 2, SF_M2
+        jmp  SF_M3
+SF_M0:  li   r8, 0
+SF_M0L: bge  r8, r2, SF_WT
+        get  r9, 6
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M0L
+SF_M1:  bnei r6, 0, SF_M1S
+        get  r1, 2
+        st   r1, S_WIDX
+        bnei r1, 3, SF_M1D
+        get  r1, 6                  ; VQ shape + long values + min/delta
+        get  r5, 6
+        shli r8, r5, 3
+        add  r8, r8, r5
+        addi r2, r8, C_SF_SHAPES
+        addi r3, r7, SF
+        ld   r4, U_USED
+        call VQ
+        ld   r2, U_USED
+        get  r3, 5                  ; num_long_vals
+        get  r4, 2                  ; delta_bits
+        get  r5, 4
+        addi r5, r5, -7             ; min_val
+        li   r8, 0
+SF_M1VL: bge r8, r3, SF_M1VR
+        get  r9, 4
+        addi r9, r9, -7
+        ld   r10, SF[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M1VL
+SF_M1VR: bge r8, r2, SF_WT
+        getr r9, r4
+        add  r9, r9, r5
+        ld   r10, SF[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M1VR
+SF_M1D: get  r3, 5                  ; num_long_vals
+        get  r4, 3                  ; delta_bits
+        get  r5, 6                  ; min_val
+        blt  r2, r3, SF_M1ERR
+        beqi r4, 7, SF_M1ERR
+        li   r8, 0
+SF_M1DL: bge r8, r3, SF_M1DR
+        get  r9, 6
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M1DL
+SF_M1DR: bge r8, r2, SF_WT
+        getr r9, r4
+        add  r9, r9, r5
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M1DR
+SF_M1ERR: err E_SF_MODE1_PARAMS
+SF_M1S: get  r3, 2                  ; slave: VLC delta to the master
+        li   r8, 0
+SF_M1SL: bge r8, r2, SF_WT
+        vlc  r9, VLC_SF[r3]
+        ld   r10, SF[r8]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M1SL
+SF_M2:  bnei r6, 0, SF_M2S
+        get  r3, 2                  ; master: VQ shape + signed VLC deltas
+        addi r3, r3, 4
+        st   r3, S_B
+        get  r1, 6
+        get  r5, 6
+        shli r8, r5, 3
+        add  r8, r8, r5
+        addi r2, r8, C_SF_SHAPES
+        addi r3, r7, SF
+        ld   r4, U_USED
+        call VQ
+        ld   r2, U_USED
+        ld   r3, S_B
+        li   r8, 0
+SF_M2ML: bge r8, r2, SF_WT
+        vlc  r9, VLC_SF[r3]
+        sext r9, r9, 4
+        ld   r10, SF[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M2ML
+SF_M2S: get  r3, 2                  ; slave: delta to the master's slope
+        vlc  r9, VLC_SF[r3]
+        ld   r10, SF
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7]
+        li   r8, 1
+SF_M2SL: bge r8, r2, SF_WT
+        ld   r10, SF[r8]
+        ld   r11, SF-1[r8]
+        sub  r10, r10, r11
+        ld   r11, SF-1[r7+r8]
+        add  r10, r10, r11
+        vlc  r9, VLC_SF[r3]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M2SL
+SF_M3:  bnei r6, 0, SF_M3S
+        get  r1, 2                  ; master: weights, table select
+        st   r1, S_WIDX
+        get  r3, 2
+        bnei r1, 3, SF_M3D
+        addi r3, r3, 4
+        st   r3, S_B
+        get  r1, 6
+        get  r5, 6
+        shli r8, r5, 3
+        add  r8, r8, r5
+        addi r2, r8, C_SF_SHAPES
+        addi r3, r7, SF
+        ld   r4, U_USED
+        call VQ
+        ld   r2, U_USED
+        ld   r3, S_B
+        get  r5, 4                  ; diff = (get 4 + 56) & 63
+        addi r5, r5, 56
+        andi r5, r5, 63
+        ld   r10, SF[r7]
+        add  r10, r10, r5
+        andi r10, r10, 63
+        st   r10, SF[r7]
+        li   r8, 1
+SF_M3VL: bge r8, r2, SF_WT
+        vlc  r9, VLC_SF[r3]
+        sext r9, r9, 4
+        add  r5, r5, r9
+        andi r5, r5, 63
+        ld   r10, SF[r7+r8]
+        add  r10, r10, r5
+        andi r10, r10, 63
+        st   r10, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M3VL
+SF_M3D: get  r9, 6                  ; first value direct, then VLC deltas
+        st   r9, SF[r7]
+        li   r8, 1
+SF_M3DL: bge r8, r2, SF_WT
+        vlc  r9, VLC_SF[r3]
+        ld   r10, SF-1[r7+r8]
+        add  r9, r9, r10
+        andi r9, r9, 63
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M3DL
+SF_M3S: li   r8, 0                  ; slave: copy the master
+SF_M3SL: bge r8, r2, SF_WT
+        ld   r9, SF[r8]
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_M3SL
+SF_WT:  ld   r1, S_WIDX             ; weights 1 and 2 only
+        beqi r1, 0, SF_RET
+        bgei r1, 3, SF_RET
+        addi r2, r1, -1
+        shli r2, r2, 5
+        addi r2, r2, C_SF_WEIGHTS
+        ld   r3, U_USED
+        li   r8, 0
+SF_WTL: bge  r8, r3, SF_RET
+        ld   r9, SF[r7+r8]
+        ld   r10, 0[r2+r8]
+        sub  r9, r9, r10
+        blti r9, 0, SF_WERR
+        li   r10, 63
+        blt  r10, r9, SF_WERR
+        st   r9, SF[r7+r8]
+        addi r8, r8, 1
+        jmp  SF_WTL
+SF_RET: ret
+SF_WERR: err E_SF_RANGE
+
+; ================================================================ code tables
+; decode_channel_code_tab (r6, r7)
+CODETAB:
+        get  r1, 1
+        st   r1, TTYPE[r7]
+        get  r1, 2                  ; mode
+        bnei r1, 3, CT_N
+        beqi r6, 0, CT_RET          ; mode 3, master: nothing coded
+CT_N:   ld   r2, U_USED             ; num_vals
+        get  r3, 1
+        beqi r3, 0, CT_NV
+        get  r2, 5
+        ld   r3, U_USED
+        blt  r3, r2, CT_ERR
+CT_NV:  ld   r4, U_FULL             ; r11 = mask, r12 = table, r13 = delta table
+        li   r11, 3
+        beqi r4, 0, CT_TB
+        li   r11, 7
+CT_TB:  li   r12, VLC_CT
+        li   r13, VLC_CT
+        beqi r4, 0, CT_TB2
+        li   r12, VLC_CT+1
+        li   r13, VLC_CT+2
+        bnei r1, 3, CT_TB2
+        li   r12, VLC_CT+3
+CT_TB2: li   r14, 0                 ; pred
+        li   r8, 0
+CT_L:   bge  r8, r2, CT_RET
+        ld   r9, WL[r7+r8]
+        beqi r9, 0, CT_CLONE
+        beqi r1, 0, CT_D
+        beqi r1, 1, CT_V
+        beqi r1, 2, CT_DV
+        vlc  r9, 0[r12]             ; mode 3: difference to the master
+        ld   r10, TAB[r8]
+        add  r9, r9, r10
+        and  r9, r9, r11
+        jmp  CT_W
+CT_D:   addi r10, r4, 2
+        getr r9, r10
+        jmp  CT_W
+CT_V:   vlc  r9, 0[r12]
+        jmp  CT_W
+CT_DV:  bnei r8, 0, CT_DV1
+        vlc  r9, 0[r12]
+        jmp  CT_DVW
+CT_DV1: vlc  r9, 0[r13]
+        add  r9, r9, r14
+        and  r9, r9, r11
+CT_DVW: mov  r14, r9
+CT_W:   st   r9, TAB[r7+r8]
+        jmp  CT_NX
+CT_CLONE: beqi r6, 0, CT_NX
+        ld   r9, WL[r8]
+        beqi r9, 0, CT_NX
+        get  r9, 1
+        st   r9, TAB[r7+r8]
+CT_NX:  addi r8, r8, 1
+        jmp  CT_L
+CT_RET: ret
+CT_ERR: err E_CT_NUM
+
+; ================================================================ the spectrum
+SPECTRUM:
+        li   r6, 0
+        li   r7, 0
+        call SPEC_CH
+        li   r1, 31                 ; ch1's master-copy flags
+SP_CC:  st   r0, COPY[r1]
+        addi r1, r1, -1
+        bgei r1, 0, SP_CC
+        li   r6, 1
+        li   r7, 0x80
+        call SPEC_CH
+        ret
+
+SPEC_CH: li  r1, 4                  ; power levels off
+        li   r2, 15
+SP_PW:  st   r2, PWR[r7+r1]
+        addi r1, r1, -1
+        bgei r1, 0, SP_PW
+        st   r0, S_QU
+SP_QU:  ld   r1, S_QU
+        ld   r2, U_USED
+        bge  r1, r2, SP_POW
+        ld   r3, WL[r7+r1]          ; wordlen
+        ld   r4, TAB[r7+r1]         ; codetab
+        beqi r3, 0, SP_COPY
+        ld   r5, U_FULL
+        ld   r8, TTYPE[r7]
+        bnei r5, 0, SP_FULL
+        shli r9, r8, 3              ; CT_R2F[(ttype * 7 + wl - 1) * 4 + ct]
+        sub  r9, r9, r8
+        add  r9, r9, r3
+        addi r9, r9, -1
+        shli r9, r9, 2
+        add  r9, r9, r4
+        ld   r4, C_CT_R2F[r9]
+SP_FULL: shli r9, r8, 3             ; tab_index = (ttype * 8 + ct) * 7 + wl - 1
+        add  r9, r9, r4
+        shli r10, r9, 3
+        sub  r9, r10, r9
+        add  r9, r9, r3
+        addi r9, r9, -1
+        ld   r10, C_QU_TO_SPEC_POS[r1]
+        ld   r11, C_QU_TO_SPEC_POS+1[r1]
+        sub  r11, r11, r10          ; num_specs
+        shli r12, r6, 11
+        add  r10, r10, r12          ; spectrum address ch * 2048 + pos
+        call QU_SPECTRA
+        jmp  SP_NX
+SP_COPY: beqi r6, 0, SP_NX          ; slave: copy the master's unit (flagged, not copied)
+        ld   r5, WL[r1]
+        beqi r5, 0, SP_NX
+        bnei r4, 0, SP_NX
+        li   r8, 1
+        st   r8, COPY[r1]
+        st   r5, WL[r7+r1]
+SP_NX:  ld   r1, S_QU
+        addi r1, r1, 1
+        st   r1, S_QU
+        jmp  SP_QU
+SP_POW: ld   r2, U_USED
+        blti r2, 3, SP_RET
+        ld   r3, U_NCSB
+        ld   r3, C_SB_NUM_POWGRPS-1[r3]
+        li   r1, 0
+SP_PWL: bge  r1, r3, SP_RET
+        get  r4, 4
+        st   r4, PWR[r7+r1]
+        addi r1, r1, 1
+        jmp  SP_PWL
+SP_RET: ret
+
+; decode_qu_spectra: r9 = table index, r10 = spectrum address, r11 = count
+QU_SPECTRA:
+        ld   r1, C_SPEC_TABS[r9]
+        andi r2, r1, 15             ; group_size
+        shri r3, r1, 4
+        andi r3, r3, 15             ; num_coeffs
+        shri r4, r1, 8
+        andi r4, r4, 15             ; bits
+        shri r5, r1, 12             ; is_signed
+        li   r12, 1                 ; mask = (1 << bits) - 1
+        shl  r12, r12, r4
+        addi r12, r12, -1
+        addi r13, r10, MEM_SPEC     ; write pointer
+        add  r14, r13, r11          ; end
+QS_L:   bge  r13, r14, QS_RET
+        beqi r2, 1, QS_G
+        get  r1, 1
+        beqi r1, 0, QS_SKIP
+QS_G:   mov  r15, r2                ; groups left
+QS_GL:  beqi r15, 0, QS_L
+        vlc  r1, VLC_SPEC[r9]
+        mov  r8, r3                 ; coefficients left in this symbol
+QS_CL:  beqi r8, 0, QS_GN
+        and  r10, r1, r12
+        beqi r5, 0, QS_UNS
+        sextr r10, r10, r4
+        jmp  QS_ST
+QS_UNS: beqi r10, 0, QS_ST          ; unsigned: a sign bit after each non-zero value
+        get  r11, 1
+        beqi r11, 0, QS_ST
+        sub  r10, r0, r10
+QS_ST:  st   r10, 0[r13]
+        addi r13, r13, 1
+        sar  r1, r1, r4
+        addi r8, r8, -1
+        jmp  QS_CL
+QS_GN:  addi r15, r15, -1
+        jmp  QS_GL
+QS_SKIP: mov r15, r2                ; a skipped group: its lines are zero
+QS_SG:  beqi r15, 0, QS_L
+        mov  r8, r3
+QS_SC:  beqi r8, 0, QS_SGN
+        st   r0, 0[r13]
+        addi r13, r13, 1
+        addi r8, r8, -1
+        jmp  QS_SC
+QS_SGN: addi r15, r15, -1
+        jmp  QS_SG
+QS_RET: ret
+
+.include "at3p_gain.uasm"
+.include "at3p_tone.uasm"
+.include "at3p_synth.uasm"

@@ -1,0 +1,59 @@
+MiSTer UMD Video Player Core — licensing notice
+===============================================
+
+The project as a whole is distributed under the **GNU General Public License,
+version 3 or later** (see LICENSE). That is what the combination resolves to:
+
+  sys/   The MiSTer framework, © MiSTer-devel and contributors. A mix of
+         "GPL version 2 or later" (alsa.sv, arcade_video.v, iir_filter.v,
+         ltc2308.sv, spdif.v, sys_top.v, video_freezer.sv, yc_out.sv) and
+         "GPL version 3 or later" (ddr_svc.sv, hps_io.sv, scandoubler.v,
+         sd_card.sv). The v2+ files can be taken to v3; the v3+ files cannot be
+         taken down, so the combined work is GPLv3-or-later. Local edits are
+         marked `UMD-FORK` and inherit the file's licence.
+
+  umd/   Original RTL for this project, GPL-3.0-or-later. Some modules are
+         inherited from the sibling project MiSTer_DVD (same author, same
+         licence); each says so in its header. Two Intel primitives are
+         instantiated by name (altera_pll in umd/sys_pll.sv) under Intel's
+         terms for use on Intel devices; no generated IP directory is shipped.
+
+  main/  The project's Main fork overlay: support/umd/ and the build scripts are
+         original to this project, GPL-3.0-or-later; they are built into a copy of
+         Main_MiSTer (GPL-3.0-or-later, fetched at build time, not vendored).
+         main/support/umd/libpng/ holds libpng 1.6.37's headers (png.h, pngconf.h,
+         pnglibconf.h), unmodified, under the libpng licence (its LICENSE file
+         beside them): the device's Main already runs with libpng 1.6.37 (the
+         MiSTer Linux image's), and umd_sub.cpp calls it through these headers.
+         THE UMD MAIN BINARY (MiSTer_UMD, in each release zip) is a derivative of
+         Main_MiSTer and is distributed under GPL-3.0-or-later. Its corresponding
+         source is Main_MiSTer at the commit MAIN_MISTER_REF in main/build_main.sh
+         (https://github.com/MiSTer-devel/Main_MiSTer) plus this repository's main/
+         at the commit its MiSTer_UMD.json names; main/build_main.sh builds it.
+
+  bench/, tools/, docs/, site/
+         Original to this project, GPL-3.0-or-later. Test fixtures cut from
+         commercial media are NOT committed (see .gitignore).
+
+Reference software used as VERIFICATION ORACLES, never vendored or linked:
+ffmpeg (LGPL/GPL) for H.264 pixel references, header traces and ATRAC3plus
+decoding; the ITU-T H.264 JM reference software (its own licence) for
+syntax-element traces. No code from either is reproduced here.
+
+One exception, the ATRAC3plus TABLES. ATRAC3plus has no public specification;
+its Huffman codebooks, weight and shape tables, quantiser steps, noise table and
+IPQF prototype filter are known only as the data of ffmpeg's reverse-engineered
+decoder (libavcodec/atrac3plus_data.h and atrac3plusdsp.c, (c) 2010-2013 Maxim
+Poliakovski, LGPL-2.1-or-later). They are transcribed, from ffmpeg n9.0.1, by
+tools/gen_at3p_tables.py into tools/at3p_tables.py and the ROM images derived
+from it, and are carried under GPL-3.0-or-later as section 3 of the LGPL-2.1
+permits. The decoding logic (tools/at3p_*.py, umd/at3p/) is this project's own,
+written from reading ffmpeg and checked against its output.
+
+Patents. H.264/AVC is subject to a patent pool whose members' patents are
+partly still in force; ATRAC3plus is a proprietary Sony format with no
+published specification. This is a hobby implementation written from the
+public H.264 specification and from the behaviour of open-source reference
+decoders. No patent licence is granted or implied by the copyright licence
+above, and nothing here should be read as a statement about the patent status
+of either format.

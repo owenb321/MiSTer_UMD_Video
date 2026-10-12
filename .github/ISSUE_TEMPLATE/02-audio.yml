@@ -1,0 +1,23 @@
+name: Audio
+description: A silent track, the wrong language, distortion
+labels: ["bug", "area:audio"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: UMD v0.1.0 261001
+    validations:
+      required: true
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What is wrong, and on which track
+    validations:
+      required: true

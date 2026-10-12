@@ -1,0 +1,426 @@
+; at3p_tone.uasm -- tonal-component parsing (at3p_ref.decode_tones_*; included by at3p.uasm).
+; A tone record (current bank, B_TONE + ch * 160 + sb * 10): pend hs start hst stop,
+; curr hs start hst stop, num_wavs, start_index. A wave (B_WAVES + 2 i): freq | phase << 10,
+; amp_sf.
+
+; r1 = the tone record of (channel r6, subband r2) in the bank at r3 (nothing else written)
+TADDR:  shli r1, r2, 2
+        add  r1, r1, r2
+        shli r1, r1, 1              ; sb * 10
+        add  r1, r1, r3
+        addi r1, r1, B_TONE
+        beqi r6, 0, TA_RET
+        addi r1, r1, 160
+TA_RET: ret
+
+; decode_tones_info
+TONES:  ld   r3, CURB               ; both channels' records cleared (320 words)
+        addi r1, r3, B_TONE
+        li   r2, 319
+TN_CLR: st   r0, 0[r1+r2]
+        addi r2, r2, -1
+        bgei r2, 0, TN_CLR
+        get  r1, 1
+        st   r1, B_TP[r3]
+        bnei r1, 0, TN_ON
+        ret
+TN_ON:  addi r1, r3, B_WAVES        ; the unit's 48 waves cleared
+        li   r2, 95
+TN_WCL: st   r0, 0[r1+r2]
+        addi r2, r2, -1
+        bgei r2, 0, TN_WCL
+        get  r1, 1
+        st   r1, B_AM[r3]
+        bnei r1, 0, TN_AM
+        err  E_GHA_AMP_MODE0
+TN_AM:  vlc  r1, VLC_TONE+0
+        addi r1, r1, 1
+        st   r1, B_NTB[r3]
+        mov  r2, r1
+        addi r1, r3, B_SHARE
+        call FLAGS
+        ld   r3, CURB
+        ld   r2, B_NTB[r3]
+        addi r1, r3, B_MAST
+        call FLAGS
+        ld   r3, CURB
+        ld   r2, B_NTB[r3]
+        addi r1, r3, B_INV
+        call FLAGS
+        ld   r3, CURB
+        st   r0, B_TIDX[r3]
+        li   r6, 0
+TN_CH:  ld   r3, CURB               ; band_has_tones: master all, slave the unshared
+        ld   r2, B_NTB[r3]
+        li   r1, 0
+TN_BHT: bge  r1, r2, TN_PARSE
+        li   r4, 1
+        beqi r6, 0, TN_BW
+        ld   r4, B_SHARE[r3+r1]
+        xori r4, r4, 1
+TN_BW:  st   r4, BHT[r1]
+        addi r1, r1, 1
+        jmp  TN_BHT
+TN_PARSE:
+        call T_ENV
+        mark 20
+        call T_NUM
+        mark 21
+        call T_FREQ
+        mark 22
+        call T_AMP
+        mark 23
+        call T_PHASE
+        mark 24
+        addi r6, r6, 1
+        blti r6, 2, TN_CH
+        ld   r3, CURB               ; sharing copies, master swaps
+        li   r2, 0
+TN_SW:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TN_RET
+        li   r6, 0
+        call TADDR
+        mov  r12, r1
+        li   r6, 1
+        call TADDR
+        mov  r13, r1
+        ld   r5, B_SHARE[r3+r2]
+        beqi r5, 0, TN_MS
+        li   r4, 9
+TN_CP:  ld   r5, 0[r12+r4]
+        st   r5, 0[r13+r4]
+        addi r4, r4, -1
+        bgei r4, 0, TN_CP
+TN_MS:  ld   r5, B_MAST[r3+r2]
+        beqi r5, 0, TN_NX
+        li   r4, 9
+TN_XC:  ld   r5, 0[r12+r4]
+        ld   r8, 0[r13+r4]
+        st   r8, 0[r12+r4]
+        st   r5, 0[r13+r4]
+        addi r4, r4, -1
+        bgei r4, 0, TN_XC
+TN_NX:  addi r2, r2, 1
+        jmp  TN_SW
+TN_RET: ret
+
+; decode_tones_envelope (channel r6)
+T_ENV:  ld   r3, CURB
+        beqi r6, 0, TE_M0
+        get  r5, 1
+        bnei r5, 0, TE_CP
+TE_M0:  li   r2, 0
+TE_L:   ld   r5, B_NTB[r3]
+        bge  r2, r5, TE_RET
+        ld   r5, BHT[r2]
+        beqi r5, 0, TE_NX
+        call TADDR
+        get  r5, 1
+        st   r5, T_PHS[r1]
+        li   r8, -1
+        beqi r5, 0, TE_S
+        get  r8, 5
+TE_S:   st   r8, T_PST[r1]
+        get  r5, 1
+        st   r5, T_PHT[r1]
+        li   r8, 32
+        beqi r5, 0, TE_P
+        get  r8, 5
+TE_P:   st   r8, T_PSP[r1]
+TE_NX:  addi r2, r2, 1
+        jmp  TE_L
+TE_CP:  li   r2, 0                  ; slave mode 1: copy the master's
+TE_CL:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TE_RET
+        ld   r5, BHT[r2]
+        beqi r5, 0, TE_CN
+        call TADDR
+        mov  r12, r1
+        li   r6, 0
+        call TADDR
+        li   r6, 1
+        li   r4, 3
+TE_CW:  ld   r5, 0[r1+r4]
+        st   r5, 0[r12+r4]
+        addi r4, r4, -1
+        bgei r4, 0, TE_CW
+TE_CN:  addi r2, r2, 1
+        jmp  TE_CL
+TE_RET: ret
+
+; decode_band_numwavs (channel r6)
+T_NUM:  ld   r3, CURB
+        addi r5, r6, 1
+        getr r9, r5                 ; mode: 1 bit (master), 2 bits (slave)
+        li   r2, 0
+TNU_L:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TNU_IX
+        ld   r5, BHT[r2]
+        beqi r5, 0, TNU_NX
+        call TADDR
+        mov  r12, r1
+        li   r10, 0                 ; the master's num_wavs (mode 2, 3)
+        beqi r9, 0, TNU_M0
+        beqi r9, 1, TNU_M1
+        mov  r13, r6
+        li   r6, 0
+        call TADDR
+        mov  r6, r13
+        ld   r10, T_NW[r1]
+        beqi r9, 3, TNU_W
+        vlc  r5, VLC_TONE+2         ; mode 2: sign-extended 3-bit delta, modulo 16
+        sext r5, r5, 3
+        add  r10, r10, r5
+        andi r10, r10, 15
+        jmp  TNU_W
+TNU_M0: get  r10, 4
+        jmp  TNU_W
+TNU_M1: vlc  r10, VLC_TONE+1
+TNU_W:  st   r10, T_NW[r12]
+TNU_NX: addi r2, r2, 1
+        jmp  TNU_L
+TNU_IX: li   r2, 0                  ; start indices; at most 48 tones a unit
+TNU_IL: ld   r5, B_NTB[r3]
+        bge  r2, r5, TNU_R
+        ld   r5, BHT[r2]
+        beqi r5, 0, TNU_IN
+        call TADDR
+        ld   r5, T_NW[r1]
+        ld   r8, B_TIDX[r3]
+        add  r9, r8, r5
+        li   r10, 48
+        blt  r10, r9, TNU_ERR
+        st   r8, T_SI[r1]
+        st   r9, B_TIDX[r3]
+TNU_IN: addi r2, r2, 1
+        jmp  TNU_IL
+TNU_R:  ret
+TNU_ERR: err E_TONES_MAX
+
+; decode_tones_frequency (channel r6)
+T_FREQ: ld   r3, CURB
+        beqi r6, 0, TF_M0
+        get  r5, 1
+        bnei r5, 0, TF_M1
+TF_M0:  li   r2, 0
+TF_L:   ld   r5, B_NTB[r3]
+        bge  r2, r5, TF_RET
+        st   r2, S_SB
+        ld   r5, BHT[r2]
+        beqi r5, 0, TF_NX
+        call TADDR
+        ld   r4, T_NW[r1]           ; nw
+        beqi r4, 0, TF_NX
+        ld   r12, T_SI[r1]
+        shli r12, r12, 1
+        add  r12, r12, r3
+        addi r12, r12, B_WAVES      ; the band's first wave
+        li   r5, 0
+        blti r4, 2, TF_ASC
+        get  r5, 1                  ; direction
+        beqi r5, 0, TF_ASC
+        get  r9, 10                 ; descending: the last first, each in log2(next)+1 bits
+        shli r10, r4, 1
+        add  r10, r10, r12
+        st   r9, -2[r10]
+        addi r10, r10, -4
+TF_DL:  blt  r10, r12, TF_NX
+        log2 r11, r9
+        addi r11, r11, 1
+        getr r9, r11
+        st   r9, 0[r10]
+        addi r10, r10, -2
+        jmp  TF_DL
+TF_ASC: li   r8, 0                  ; ascending: 10 bits while below 512
+        li   r9, 0
+TF_AL:  bge  r8, r4, TF_NX
+        beqi r8, 0, TF_A10
+        li   r11, 511
+        bge  r11, r9, TF_A10
+        li   r11, 1023
+        sub  r11, r11, r9
+        log2 r11, r11
+        addi r11, r11, 1
+        getr r9, r11
+        addi r9, r9, 1024
+        li   r13, 1
+        shl  r13, r13, r11
+        sub  r9, r9, r13
+        jmp  TF_AW
+TF_A10: get  r9, 10
+TF_AW:  shli r10, r8, 1
+        st   r9, 0[r12+r10]
+        addi r8, r8, 1
+        jmp  TF_AL
+TF_NX:  ld   r2, S_SB
+        addi r2, r2, 1
+        jmp  TF_L
+TF_RET: ret
+TF_M1:  li   r2, 0                  ; slave mode 1: VLC modulo delta to the master's waves
+TF1_L:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TF_RET
+        ld   r5, BHT[r2]
+        beqi r5, 0, TF1_NX
+        call TADDR                  ; slave record
+        ld   r4, T_NW[r1]
+        beqi r4, 0, TF1_NX
+        ld   r12, T_SI[r1]
+        shli r12, r12, 1
+        add  r12, r12, r3
+        addi r12, r12, B_WAVES      ; ow
+        li   r6, 0
+        call TADDR                  ; master record
+        li   r6, 1
+        ld   r14, T_NW[r1]          ; ref nw
+        ld   r13, T_SI[r1]
+        shli r13, r13, 1
+        add  r13, r13, r3
+        addi r13, r13, B_WAVES      ; iw
+        li   r8, 0
+TF1_W:  bge  r8, r4, TF1_NX
+        vlc  r5, VLC_TONE+6
+        sext r5, r5, 8
+        li   r9, 0                  ; pred
+        blt  r8, r14, TF1_IN
+        beqi r14, 0, TF1_P
+        shli r10, r14, 1
+        add  r10, r10, r13
+        ld   r9, -2[r10]
+        andi r9, r9, 0x3FF
+        jmp  TF1_P
+TF1_IN: shli r10, r8, 1
+        ld   r9, 0[r13+r10]
+        andi r9, r9, 0x3FF
+TF1_P:  add  r9, r9, r5
+        andi r9, r9, 0x3FF
+        shli r10, r8, 1
+        st   r9, 0[r12+r10]
+        addi r8, r8, 1
+        jmp  TF1_W
+TF1_NX: addi r2, r2, 1
+        jmp  TF1_L
+
+; decode_tones_amplitude (channel r6). amplitude_mode is 1 here (0 is refused above).
+T_AMP:  ld   r3, CURB
+        beqi r6, 0, TA_MODE
+        li   r2, 0                  ; slave: the reference wave of each wave (REFW)
+TAR_L:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TA_MODE
+        ld   r5, BHT[r2]
+        beqi r5, 0, TAR_NX
+        call TADDR
+        ld   r4, T_NW[r1]
+        beqi r4, 0, TAR_NX
+        ld   r12, T_SI[r1]          ; dst start
+        li   r6, 0
+        call TADDR
+        li   r6, 1
+        ld   r14, T_NW[r1]          ; ref nw
+        ld   r13, T_SI[r1]          ; ref start
+        li   r8, 0                  ; j
+TAR_J:  bge  r8, r4, TAR_NX
+        add  r9, r12, r8
+        shli r9, r9, 1
+        add  r9, r9, r3
+        ld   r9, B_WAVES[r9]
+        andi r9, r9, 0x3FF          ; wsrc[j].freq
+        li   r10, 0                 ; i
+        li   r11, 0                 ; fi
+        li   r15, 1024              ; maxdiff
+TAR_I:  bge  r10, r14, TAR_PICK
+        add  r5, r13, r10
+        shli r5, r5, 1
+        add  r5, r5, r3
+        ld   r5, B_WAVES[r5]
+        andi r5, r5, 0x3FF
+        sub  r5, r9, r5
+        abs  r5, r5
+        bge  r5, r15, TAR_IN
+        mov  r15, r5
+        mov  r11, r10
+TAR_IN: addi r10, r10, 1
+        jmp  TAR_I
+TAR_PICK: add r5, r12, r8           ; refwaves[dst start + j]
+        blti r15, 8, TAR_FI
+        blt  r8, r14, TAR_J2
+        li   r10, -1
+        jmp  TAR_W
+TAR_FI: add  r10, r11, r13
+        jmp  TAR_W
+TAR_J2: add  r10, r8, r13
+TAR_W:  st   r10, REFW[r5]
+        addi r8, r8, 1
+        jmp  TAR_J
+TAR_NX: addi r2, r2, 1
+        jmp  TAR_L
+TA_MODE: addi r5, r6, 1
+        getr r9, r5                 ; mode
+        li   r2, 0
+TAM_L:  ld   r5, B_NTB[r3]
+        bge  r2, r5, TAM_R
+        ld   r5, BHT[r2]
+        beqi r5, 0, TAM_NX
+        call TADDR
+        ld   r4, T_NW[r1]
+        ld   r12, T_SI[r1]
+        li   r8, 0
+TAM_W:  bge  r8, r4, TAM_NX
+        add  r13, r12, r8           ; wave index
+        beqi r9, 0, TAM_0
+        beqi r9, 1, TAM_1
+        ld   r11, REFW[r13]
+        beqi r9, 3, TAM_3
+        vlc  r5, VLC_TONE+5         ; mode 2: modulo delta to the reference wave (34 if none)
+        sext r5, r5, 5
+        li   r10, 34
+        blti r11, 0, TAM_2P
+        shli r10, r11, 1
+        add  r10, r10, r3
+        ld   r10, B_WAVES+1[r10]
+TAM_2P: add  r10, r10, r5
+        andi r10, r10, 63
+        jmp  TAM_ST
+TAM_3:  li   r10, 32                ; mode 3: clone the reference wave (32 if none)
+        blti r11, 0, TAM_ST
+        shli r10, r11, 1
+        add  r10, r10, r3
+        ld   r10, B_WAVES+1[r10]
+        jmp  TAM_ST
+TAM_0:  get  r10, 6
+        jmp  TAM_ST
+TAM_1:  vlc  r10, VLC_TONE+3
+        addi r10, r10, 20
+TAM_ST: shli r5, r13, 1
+        add  r5, r5, r3
+        st   r10, B_WAVES+1[r5]
+        addi r8, r8, 1
+        jmp  TAM_W
+TAM_NX: addi r2, r2, 1
+        jmp  TAM_L
+TAM_R:  ret
+
+; decode_tones_phase (channel r6)
+T_PHASE: ld  r3, CURB
+        li   r2, 0
+TP_L:   ld   r5, B_NTB[r3]
+        bge  r2, r5, TP_R
+        ld   r5, BHT[r2]
+        beqi r5, 0, TP_NX
+        call TADDR
+        ld   r4, T_NW[r1]
+        ld   r12, T_SI[r1]
+        li   r8, 0
+TP_W:   bge  r8, r4, TP_NX
+        add  r13, r12, r8
+        shli r13, r13, 1
+        add  r13, r13, r3
+        get  r5, 5
+        shli r5, r5, 10
+        ld   r10, B_WAVES[r13]
+        or   r10, r10, r5
+        st   r10, B_WAVES[r13]
+        addi r8, r8, 1
+        jmp  TP_W
+TP_NX:  addi r2, r2, 1
+        jmp  TP_L
+TP_R:   ret

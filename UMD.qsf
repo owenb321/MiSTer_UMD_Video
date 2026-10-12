@@ -1,0 +1,535 @@
+# UMD.qsf -- Quartus 17.0.2 project for the MiSTer UMD Video player core.
+#
+# THE FILE LIST BELOW GATES MORE THAN THE COMPILE. tools/lint_undriven.sh lints exactly
+# the files named here, and tools/netlist_canary.sh reads the map report this project
+# writes. A new umd/*.sv that is not named here is invisible to Quartus AND to both
+# gates: the compile fails on an undefined entity, or worse, elaborates without it.
+# Add the SYSTEMVERILOG_FILE line in the same commit as the module.
+#
+# Do NOT hand-edit the pin/HPS assignments: they come from `source sys/sys.tcl` and
+# `source sys/sys_analog.tcl`, which Quartus expands into this file on open. If it
+# writes the expansion back, keep it -- it is stock MiSTer content.
+#
+# SEED LEDGER (append one line per fit that ships or teaches something; never delete):
+#   date (branch/slug): SEED n, clk_dec 100C/-40C MHz, ALM %, build name, commit
+#   -- the fitter SEED is tied to the EXACT synthesis netlist. ANY change to the
+#      netlist, including a CONF_STR row or the CORE_VERSION string, re-rolls it.
+#      tools/seed_sweep.sh finds a passing seed; tools/fmax_check.sh gates BOTH corners.
+#   2026-09-23 (feature/scaffold, dev-scaffold): SEED 1, clk_dec 352.11/322.16, ALM 7,190
+#     (17 %), M10K 62, DSP 36, UMD_scaffold_20260923_0328.rbf, first roll. The scaffold
+#     alone: framework 6.4K ALM, emu 833 (xmb_wave 232, hps_io 391, block_streamer 101,
+#     sync_gen 30, dec_stub 12). The three tint multiplies took 3 DSPs; 33 are ascal's.
+#   2026-09-23 (feature/p2-reader-demux, dev-p2reader): SEED 1, clk_dec 350.26/320.62,
+#     ALM 9,539 (23 %, +2,349 on P0), M10K 86 (+24), DSP 36, UMD_p2reader_20260923_1505.rbf,
+#     first roll, every gate PASS, built from 0506f7d + the emu/HUD wiring (dirty tree).
+#     umd_reader 2,041 ALM (u32 walk offsets, 48/64-bit durations and its telemetry
+#     registers; cache 16 M10K, parse_buf 2, title 1), p2_diag 151, ps_demux 142,
+#     es_probe 121, diag_hud 21 (plane + font 3 M10K), ps_stream_fifo 19. clk_sys slack
+#     +8.39 ns (100C) / +8.56 ns (-40C). The one negative slack is the framework's
+#     pll_hdmi at -40C (-0.060 ns): shared infrastructure, no emu logic in that domain.
+#   2026-09-23 (feature/p3-h264-frontend, dev-p3h264): SEED 1, clk_dec 94.72/92.29 (the
+#     first fit with real logic in that domain; target 86.0), ALM 12,959 (31 %, +3,420 on
+#     P2), M10K 99 (+13), DSP 39 (+3: mb_syntax's), UMD_p3h264_20260923_2237.rbf, first
+#     roll, every gate PASS, 5 min in the container. h264_top 3,640 ALM (mb_syntax
+#     ~2.6K; the standalone 3,919 shrank with the unused sp_* outputs pruned), cdc_snap
+#     232 (329 bits held twice), p2_diag 240 (+89: 13 more fields, a 1024-word template),
+#     vidfeed_cdc 40 (fifo_dc 24), es_probe 125, ps_demux 150, umd_reader 2,283.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, DID NOT FIT -- 4,807 LABs needed
+#     of 4,191, commit c775d47 (the reconstruction in emu, first build). recon_top
+#     33,881 ALM placed; synthesis 47,964 LUTs / 28,992 regs (the sample banks 6,144 regs:
+#     a 48-deep byte-enabled array Quartus left in registers; recon_lists 8,397 LUTs).
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 40.87/40.51 (FAIL, target
+#     86.0), ALM 37,785 (90 %), M10K 178, DSP 72, UMD_p4recon_MARGINAL_20260924_0629.rbf
+#     (not for the rig), commit db7ab90 (the area work: scans, m_code, banks 64 deep; recon
+#     34,605 LUTs). 10,451 failing clk_dec endpoints at -40 C, the front end's mb_syntax
+#     among them (-5.1 ns: the crowded chip). docs/h264_recon.md S6.2.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 83.86/82.91 (FAIL vs 86.0,
+#     but above the 81.0 clock: the front end alone now), ALM 36,858 (88 %), M10K 184,
+#     DSP 72, UMD_p4recon_MARGINAL_20260924_0705.rbf, commit a87674b -- the P4 smoke
+#     clocking (recon_top on clk_sys). clk_sys -0.13 (100C) and clk_mem -0.69 / -1.66
+#     setup, clk_mem -5.0 recovery: disp_smoke's row-address multiply at 90 MHz, and the
+#     27 / 90 MHz crossings timed at 3.7 ns (umd/umd.sdc now bounds them). NOTE: the qsf
+#     had been rewritten by Quartus (a crashed quartus_map, low memory: the framework's
+#     pin assignments inlined, this ledger's new lines lost) and committed so in 460b944;
+#     restored from 31fc2ab. build_release.sh now refuses such a rewrite.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 89.49/88.53 (PASS), ALM
+#     36,885 (88 %), M10K 184, DSP 72, UMD_p4recon_20260924_1056.rbf, commit a1a788c, every
+#     gate PASS. STA with 4a8827f's umd.sdc on this fit: every core clock positive at both
+#     corners (clk_sys +3.68, clk_mem +1.42 setup). HW SMOKE PASS on the rig: Akira's
+#     opening (515 pictures) and Family Guy's fields (1,188) decoded clean, P4 ERR 0,
+#     ~5 frames / s on the 27 MHz smoke clock.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 85.99/84.35 (MARGINAL vs
+#     86.0), ALM 38,259 (91 %), UMD_p4recon_MARGINAL_20260924_1345.rbf, commit 954adcd --
+#     20 DPB stores (the spec maximum); recon_top 24,639 ALM. Not for the rig. The fit that
+#     set the P4 area exit criteria (roadmap.md Phase 4).
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 92.52/90.88 (PASS), ALM
+#     25,602 (61 %), M10K 209, DSP 65, UMD_p4recon_20260924_1636.rbf, 4e69c21 + the
+#     uncommitted area batch (streamed deblock, case selects, code / neighbour RAMs,
+#     nb_above held by LM_INFO's port -- committed next), every gate PASS. recon_top
+#     11,930 ALM (the <= 12K exit criterion met), h264_top 3,565, umd_reader 1,956; clk_sys
+#     44.75 MHz @100C for the smoke-clocked reconstruction.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): the reconstruction back on clk_dec (emu),
+#     SEED 1 throughout, 64d33cf + the uncommitted timing work: 51.03/48.91 (the first fit
+#     with it on, 2,627 failing endpoints), then per register round 75.69/71.75,
+#     78.14/74.67, 86.33/81.69 (all MARGINAL, not for the rig), then 92.54/89.84 PASS,
+#     ALM 25,545 (61 %), M10K 208, DSP 65, UMD_p4recon_20260924_1934.rbf, every gate PASS
+#     -- the P4 timing exit criterion met on the fit. docs/h264_recon.md S6.2.
+#   2026-09-24 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 89.57/89.40 PASS, ALM
+#     26,380 (63 %: recon_top 12,786 -- OVER the 12K / 26K area criterion again), M10K
+#     218, DSP 65, UMD_p4recon_20260924_2353.rbf, e312086 + the throughput batch (the MB
+#     overlap, the weighting fold, four row buffers, the double-buffered intake, the
+#     residual engine), every gate PASS. Disc windows 1,843 / 1,639 cycles a MB in sim.
+#   2026-09-25 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 93.67/92.18 PASS, ALM
+#     25,054 (60 %: recon_top 11,470 -- the area criterion met again), M10K 227, DSP 65,
+#     UMD_p4recon_20260925_0016.rbf, 113b781 + the row buffers as byte lanes and the DC
+#     arrays in RAM (fit from a scratch copy of that tree), every gate PASS.
+#   2026-09-25 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 89.64/89.41 PASS, ALM
+#     25,040 (60 %: recon_top 11,467), UMD_p4recon_20260925_1106.rbf, faa7c8c (sixteen
+#     reference rows in flight: every disc window >= 1.08x real time in the cosim), every
+#     gate PASS.
+#   2026-09-25 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 87.11/87.87 PASS (tighter:
+#     89.6 before), ALM 25,084 (60 %: recon_top 11,504), UMD_p4recon_20260925_1845.rbf,
+#     f4440c9 (the fetch / interpolation overlap: every disc window >= 1.35x in the
+#     cosim), every gate PASS. On the rig: The Office Disc 01 83.1 fields/s (1.39x),
+#     Family Guy 95.9 (1.60x), Akira 44.0 frames/s (1.83x), ERR 0.
+#   2026-09-25 (feature/p4-recon, dev-p4recon): SEED 1, clk_dec 89.46/88.02 PASS, ALM
+#     25,107 (60 %: recon_top 11,524), UMD_p4recon_20260925_2000.rbf, a90c60b (the
+#     recon_lists duplicate-removal fix the JM fixtures found), every gate PASS.
+#   2026-09-26 (feature/p5-display, dev-p5display): SEED 1 (re-rolled: the P5 CONF_STR),
+#     clk_dec 91.09/89.65 PASS, ALM 25,084 (60 %), M10K 227, DSP 65,
+#     UMD_p5display_20260926_0007.rbf, e4ec178 (P5a: the display reader on ram2, the
+#     sys_top ram2 fork, field-aware chroma), every gate PASS, no 10236.
+#   2026-09-26 (feature/p5-display, dev-p5display): SEED 1, clk_dec 93.61/90.27 PASS,
+#     ALM 25,474 (61 %; +390: the VUI states, aspect_vui 56), M10K 228, DSP 68 (+3: the
+#     aspect products), UMD_p5display_20260926_0145.rbf, fb002ad (P5b: the VUI, the
+#     aspect from the stream), every gate PASS; both SPS stores still inferred RAM.
+#   2026-09-26 (feature/p5-display, dev-p5display): SEED 1, clk_dec 87.83/86.93 PASS but
+#     THIN (0.93 MHz at -40C; 93.61/90.27 at P5b), ALM 25,991 (62 %; +517: sei_pt, au_pts,
+#     the HUD's P5 row, the 42-bit CDC), M10K 229, DSP 68, UMD_p5display_20260926_0501.rbf,
+#     b5a5cf9 (P5c: the picture timing SEI, the PES PTS, the EOS word), every gate PASS,
+#     no 10236. Binding paths (timing_paths.sh, -40C): ALL 40 worst are P4's
+#     recon_mb|mv_pred sp_mode / b8 -> mvp_q (~10.8 ns) -- none of P5c's logic: the loss
+#     is placement at 62 %. If P5d's fit misses, that path is the one to pipeline.
+#   2026-09-26 (feature/p5-display, dev-p5display): SEED 1, clk_dec 87.25/87.31 PASS
+#     (1.25 MHz at 100C), ALM 26,627 (64 %; +636: the C.4 output process in recon_dpb,
+#     recon_out, the HUD's OUT row), M10K 233 (+4: recon_out's tables), DSP 69,
+#     UMD_p5display_20260926_1507.rbf, 6435725 (P5d: output order, holds / releases, EOS
+#     flush), every gate PASS.
+#   2026-09-26 (feature/p5-sched, dev-p5sched): SEED 1, clk_dec 85.07/84.48 FAIL (MARGINAL),
+#     ALM 27,277 (65 %; +650: disp_ctl + disp_sched, recon_out's timing columns, the HUD
+#     row), M10K 238, DSP 74 (+5: the VUI tick multiply, the lag in ms),
+#     UMD_p5sched_MARGINAL_20260926_1744.rbf, 52270e1 (P5e). Binding (-40C): recon_dpb's
+#     output scan (poc_b RAM -> min(top, bottom) -> best_poc), P5d's -- not P5e's clk_sys
+#     logic: placement at 65 %. Fixed by registering the scan's first stage:
+#   2026-09-26 (feature/p5-sched, dev-p5sched): SEED 1, clk_dec 87.34/89.29 PASS, ALM 27,378
+#     (65 %), M10K 238, DSP 74, UMD_p5sched_20260926_1746.rbf, 9c79687 (the scan in two
+#     stages), every gate PASS.
+#   2026-09-26 (feature/p5-sched, dev-p5sched): SEED 1, clk_dec 90.99/89.44 PASS, ALM 27,332
+#     (65 %), M10K 238, DSP 74, UMD_p5sched_20260926_1851.rbf, 9fe90f1 (LT as a missed
+#     opportunity), every gate PASS.
+#   2026-09-26 (feature/telemetry, dev-telem): SEED 1, clk_dec 88.74/86.38 PASS (0.38 MHz at
+#     -40C: thin), ALM 27,900 (67 %; +568: umd_telem 250, the DDR3 probes 217, their snaps
+#     63, disp_ctl counters no longer pruned), M10K 238, DSP 74, UMD_telem_20260926_1939.rbf,
+#     6a6db2d (the telemetry responder + DDR3 probes), every gate PASS.
+#   2026-09-26 (feature/telemetry, dev-telem): SEED 1, clk_dec 91.65/89.51 PASS, ALM 27,726
+#     (66 %; +394 over P5e: umd_telem 140, the probes 172, their snaps 46 -- option B, 34
+#     16-bit words), M10K 238, DSP 74, UMD_telem_20260926_2059.rbf, c9febd1, every gate PASS.
+#   2026-09-26 (fix/ddr-reload-hang, dev-reloadfix): SEED 1, clk_dec 89.81/88.48 PASS, ALM
+#     27,832 (66 %; +106: ddr_mux2's held command and its compare), M10K 238, DSP 74,
+#     UMD_reloadfix_20260926_2309.rbf, b5d645d (a withdrawn request held; DDR3 masters
+#     reset with the lock alone), every gate PASS.
+#   2026-09-26 (fix/ddr-reload-hang, dev-reloadfix): SEED 1, clk_dec 90.16/89.18 PASS, ALM
+#     27,827 (66 %; -5: sys's f2sdram_safe_terminator forked -- the write burst counted
+#     at the port), M10K 238, DSP 74, UMD_reloadfix_20260926_2349.rbf, 5aeb776, every gate PASS.
+#   2026-09-27 (feature/p5f-deint, dev-p5f-deint): SEED 1, clk_dec 88.33/85.95 MARGINAL
+#     (0.05 MHz under at -40C; the 40 worst paths all P4's mv_pred sp_mode / b8 -> mvp_q,
+#     none of P5f's clk_sys / clk_mem logic), ALM 28,062 (67 %, +235), M10K 256 (+18: the
+#     reader's 3-line window), DSP 74, UMD_p5f-deint_MARGINAL_20260927_0147.rbf, 69549de.
+#   2026-09-27 (feature/p5f-deint, dev-p5f-deint): SEED 9, clk_dec 91.68/90.28 PASS
+#     (seed_sweep: SEED 7 86.41/84.72 marginal, 9 first pass), UMD_p5f-deint_20260927_0206.rbf,
+#     9ba5ffa (the same netlist as 69549de; the sweep's qsf rewrite reverted, SEED pinned).
+#   2026-09-27 (feature/p5g-closeout, dev-p5g): SEED 9, clk_dec 92.91/90.46 PASS, ALM 28,073
+#     (67 %), M10K 256, DSP 74, UMD_p5g_20260927_0308.rbf, 3b508a5 (RTL as e190c85). umd.sdc bounds the cdc_snaps: every core-PLL clock positive at both
+#     slow corners (clk_sys +2.32/+2.52 ns, was -0.28/-0.09), no fmax_check warning.
+#   2026-09-27 (feature/p6-atrac3p, dev-at3p): SEED 9, clk_dec 87.07/86.48 PASS (0.48 MHz at
+#     -40C: thin), ALM 30,739 (73 %; +2,666 over P5g: the ATRAC3plus decoder, aud_ring,
+#     aud_out, the AT3 HUD row, 11 telemetry words), M10K 393 (+137: decoder 87, ring 32, PCM
+#     16, tags 2), DSP 76 (+2), UMD_p6a_20260927_1210.rbf, 03845ed (P6a: the audio path in
+#     emu). Core-PLL clocks all positive (clk_sys +1.83/+2.03 ns); pll_hdmi -0.12/-0.42 ns
+#     (framework, no emu logic), every gate PASS.
+#   2026-09-27 (feature/p6-atrac3p, dev-at3p): SEED 9, clk_dec 89.86/88.13 PASS, ALM 31,420
+#     (75 %; +681: umd/vbuf.sv, ddr_mux2's B writes), M10K 401 (+8: vbuf's FIFOs and stamps),
+#     DSP 76, UMD_p6vbuf_20260927_1304.rbf, c742f1f (the compressed-video buffer on ram1).
+#     fmax_check WARNED: clk_sys -0.133 ns at 100C, vbuf clr_ack -> ack_s1 (a two-flop
+#     synchroniser timed on the 27 / 90 MHz edge window; bounded in umd.sdc since). The
+#     RIG-TESTED build: Family Guy, Akira, The Office in step, the reload soak.
+#   2026-09-27 (feature/p6-atrac3p, dev-at3p): SEED 9, clk_dec 88.52/86.04 PASS (0.04 MHz at
+#     -40C: razor thin -- the SDC change re-rolled placement), ALM 31,400, M10K 401, DSP 76,
+#     UMD_p6vbuf2_20260927_1317.rbf, eaa2478 (umd.sdc bounds the vbuf handshake), no
+#     warning. The next netlist change should expect a seed sweep.
+#   2026-09-27 (feature/p6b-transport, dev-p6b): SEED 9 first roll, clk_dec 88.26/87.05 PASS
+#     (+1.0 MHz at -40C over the last fit), ALM 31,351 (75 %; the recovery-point start and the
+#     parameter sets' own reset: within the fitter's noise, -49), M10K 401, DSP 76,
+#     UMD_p6b_20260927_2222.rbf, 55b8326 (P6b1: the decoder's discontinuity), no warning.
+#   2026-09-28 (feature/p6b-transport, dev-p6b): SEED 9 first roll, clk_dec 87.63/87.56 PASS,
+#     ALM 32,152 (77 %, +801: the reader 1,926 -> 2,699 with its navigation port tied off --
+#     IN / OUT lookups live, the seek / chapter states kept; ~+1.4K when P6b3 drives it, by
+#     the calibrated synthesis estimate), M10K 401, DSP 76, UMD_p6b_20260928_0246.rbf,
+#     4409ace (P6b2: the reader's navigation), no warning.
+#   2026-09-28 (feature/p6b3-player, dev-p6b3): SEED 9 first roll MISSED, clk_dec 86.35/83.33
+#     (-40C binds on P4's mv_pred median, mvp_q: no P6b3 logic in the top 60 paths),
+#     ALM 33,145 (79 %, +993: player_ctl 347, the reader driven 2,699 -> 3,280, the display's
+#     transport), UMD_p6b3_MARGINAL_20260928_0541.rbf (not for the rig), 68dbfee + the emu wiring.
+#   2026-09-28 (feature/p6b3-player, dev-p6b3): SEED 1 (sweep, first seed), clk_dec 87.09/86.84
+#     PASS, ALM 33,213 (79 %), M10K 401, DSP 76, UMD_p6b3_20260928_0556.rbf (its manifest
+#     says seed 9: it reads the qsf before the pin), 68dbfee + the emu wiring (P6b3).
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i): SEED 1 MISSED, clk_dec 85.57/87.35 (100C binds),
+#     ALM 33,479 (80 %, +266: the item tag's path and table, the hold), M10K 403,
+#     UMD_p6b3i_MARGINAL_20260928_1007.rbf (not for the rig), 9c31b3b.
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i): SEED 2 (sweep, second seed), clk_dec 86.72/86.31
+#     PASS (thin: 0.31 MHz), UMD_p6b3i_20260928_1030.rbf, 9c31b3b (P6b3i).
+#     Rig: My Chemical Romance disc 2 HUNG at item 0 -> 1 (item 0's audio past OUT waited 53 s
+#     "early" on item 1's clock; the ring blocked the demux) -> the audio item tag + the stall breaker.
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i, with the audio tag + breaker): SEED 2 MISSED,
+#     85.93/87.58, ALM 33,515; the sweep: SEEDs 3-8 missed (84.34-86.06 / 83.33-85.92 -- the
+#     mv_pred wall), SEED 9 PASS 88.57/88.13, ALM 33,473 (80 %), M10K 403,
+#     UMD_p6b3i_20260928_1336.rbf.
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i, + the transport's telemetry): SEED 9, clk_dec
+#     87.57/86.45 PASS, UMD_p6b3i_20260928_1341.rbf, a448661 + the telemetry.
+#     Rig: MCR disc 2 no longer hangs, but no audio after the item change (aud_ep cleared
+#     every cycle in ps_demux) -> fixed.
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i, the aud_ep fix): SEED 9 MISSED, 86.18/84.97,
+#     UMD_p6b3i_MARGINAL_20260928_1415.rbf (not for the rig), b64cc97. The sweep (fit only, on
+#     that synthesis): SEED 1 PASS 89.24/89.37, ALM 33,692 (80 %), M10K 403, DSP 76,
+#     UMD_p6b3i_20260928_1436.rbf (its manifest says seed 9 and dirty: it reads the qsf and
+#     the tree at packing). Five seeds a branch had to be swept: the clk_dec wall retimed next.
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i, the clk_dec wall retimed at zero cycles:
+#     docs/h264_recon.md S6.3): SEED 9 first roll PASS 87.25/87.70 (was 86.18/84.97 at SEED 9),
+#     ALM 33,595 (80 %), M10K 403, DSP 76, UMD_p6b3i_20260928_1506.rbf, 752e912. The binding
+#     path is now recon_dpb's picture open (sh_frame_num -> pairing -> ref_b / ref_t enables).
+#     Rig: Family Guy, The Office Disc 01, Akira clean (errors 0, the judder gate equal).
+#     Seeds on the same synthesis (tools/seed_sweep.sh, SWEEP_ALL): SEED 1 89.65/90.27
+#     (UMD_p6b3i_20260928_1533.rbf), SEED 2 89.25/89.78 (UMD_p6b3i_seeds_20260928_1606.rbf),
+#     SEED 3 86.39/88.61, SEED 4 87.93/86.93: 5 of 5 pass (the netlist before: 2 of 9).
+#   2026-09-28 (feature/p6b3i-item, dev-p6b3i, + a frozen display's holds no decode error):
+#     SEED 9 first roll PASS 90.79/90.44, ALM 33,573 (80 %), UMD_p6b3i_20260928_1606.rbf,
+#     69179a5. Rig: Akira paused ~20 s and through a Next's freeze, recon_err 0 (the build
+#     before: ~8 a second); the resume's av_err unchanged.
+#   2026-09-28 (feature/p6b4-trick, dev-p6b4, trick play: player_ctl's hops, h264_top's
+#     one_frame, the reader's [IN, OUT) clamp, the D-pad, the telemetry's `trick` word):
+#     SEED 9 first roll PASS 90.42/89.37, ALM 33,847 (81 %, +274; player_ctl 347 -> 962),
+#     M10K 403, DSP 76, UMD_p6b4_20260929_0249.rbf, 2c803f2.
+#   2026-09-29 (feature/p6b5-hud, dev-p6b5, the transport HUD: transport_hud, the reader's
+#     item_base / pl_dur / second title port, the interim D / A keys): SEED 9 first roll PASS
+#     87.23/87.31, ALM 34,880 (83 %, +1,033; transport_hud 776, player_ctl 962 -> 1,080 by
+#     placement), M10K 419 (+16: the HUD 13 -- its font 10 --, the title copy 1), DSP 78,
+#     UMD_p6b5_20260929_1305.rbf, b45ae99.
+#   2026-09-29 (feature/p6b6-inputs, dev-p6b6, D10: the 11-button J1 list + jn, the full
+#     keyboard table, Pause = PAUSE; the reader's trims from P6b5): SEED 9 first roll PASS
+#     87.40/88.16, ALM 34,814 (83 %, -66), M10K 419, DSP 78, UMD_p6b6_20260929_1517.rbf, d743272.
+#   2026-09-29 (feature/p6b7-rig, dev-p6b7, telemetry for the rig gates: land_pts, seek_lat,
+#     the watchdogs, the recovery-point start, the HUD's flags; 63 words): SEED 9 first roll,
+#     clk_dec 87.15/88.09, ALM 34,865 (83 %, +51), M10K 419, DSP 78, UMD_p6b7_20260929_1608.rbf, 2c1774a.
+#   2026-09-29 (dev-p6b7, the rig's chapter flicker fixed in player_ctl + a hop race): SEED 9
+#     first roll, clk_dec 87.64/86.69, ALM 34,987 (83 %, +122), UMD_p6b7fix_20260929_1721.rbf, e5d95a4.
+#   2026-09-29 (dev-p6b7, + the track switch's realign in the reset's last cycle): SEED 9 first
+#     roll, clk_dec 88.44/89.57, ALM 34,945 (83 %, +80 on P6b6), M10K 419, UMD_p6b7b_20260929_1758.rbf, 12b6527.
+#   2026-09-30 (fix/film-timing, dev-filmtime, the lone-PTS rule in disp_sched + n_lone telemetry):
+#     SEED 9 first roll PASS, clk_dec 87.05/86.31, ALM 34,949 (83 %, +4), M10K 419, DSP 78,
+#     UMD_filmtime_20260930_0009.rbf, c4422c2.
+#   2026-09-30 (fix/lone-early, dev-loneearly, rule B: lone EARLY PTS disbelieved too): SEED 9 first
+#     roll PASS, clk_dec 87.29/87.86, ALM 34,961 (83 %, +12), M10K 419, UMD_loneearly_20260930_0446.rbf, dc4bc09.
+#   2026-09-30 (feature/p7-png, dev-p7png, MEASUREMENT for docs/area_plan.md, not kept: main's netlist +
+#     MISTER_DISABLE_ADAPTIVE / DISABLE_YC / DOWNSCALE_NN): SEED 9 FAIL, clk_dec 86.17/85.24, ALM 34,410
+#     (82 %, -551: ascal -191, yc_out -233), M10K 416, DSP 66 (-12); rbf deleted, d049aa4.
+#   2026-09-30 (feature/p7-subs, dev-p7subs, P7a+P7b: the subtitle overlay in emu): SEED 9 first roll,
+#     clk_dec 87.27/86.13 PASS, ALM 39,563 (94 %, +4,602), M10K 493, DSP 84; clk_mem -0.042 ns 100C on
+#     the new sub_flush crossing (bounded in umd.sdc after this fit); UMD_p7subs_20260930_1536.rbf, d77a291+.
+#   2026-09-30 (feature/p7-subs, the seek / CLP-mask fix): SEED 9 MARGINAL, clk_dec 84.92/84.73, ALM 39,538
+#     (94 %), M10K 493, DSP 84; rig-tested (P7c) as UMD_p7subs_MARGINAL_20260930_1641.rbf, 95fe584; the sweep follows.
+#   2026-09-30 (feature/p7-subs, 95fe584) SWEEP, area_plan.md A2's rule: 0 of 5 pass (+ SEED 9 above) --
+#     SEED 1 84.93/84.11, 3 84.32/84.42, 5 85.98/87.21, 7 86.32/85.24, 11 81.61/81.53 (clk_dec 100C/-40C).
+#     The ceiling is found at 94 %: binding recon_dpb's POC (tmp_b -> prev_poc_lsb); retime next (the H264 fork's).
+#   2026-09-30 (feature/p7-subs, a0b5a5c: recon_dpb retimed, h264_recon.md S6.4): SEED 9 PASS 88.70/86.35, ALM 40,739
+#     (97 %); clk_mem -0.254 ns (-40C) on ram2's ddr_probe -- UMD_p7subs_20260930_1902.rbf (not kept for the rig).
+#   2026-09-30 (5cf7c69: ddr_probe registers its inputs): SEED 9 MARGINAL 85.03/86.19, ALM 40,875 (98 %), M10K 493, DSP 84.
+#     SWEEP (A2): 5 of 5 PASS -- SEED 1 87.50/89.25, 3 89.73/89.67, 5 89.23/87.37, 7 88.37/86.20, 11 87.53/86.64;
+#     clk_mem 93.44/94.25 on SEED 3. P7's checkpoint = 40,875 (area_plan.md S7). SEED 3 PINNED:
+#     UMD_p7subs_sweep2_20260930_2056.rbf.
+#   2026-10-01 (feature/hps-b3, 18600a7: A7's B3, the decode out of the fabric, umd_host): SEED 3 first roll PASS
+#     88.69/87.62, ALM 37,171 (89 %, -3,704 vs P7's 40,875), M10K 443 (-50), DSP 81 (-3); clk_mem 100.95/99.13.
+#     UMD_hpsb3_20261001_0153_20261001_0553.rbf. One fit, not B4's sweep (hps_host.md S6 "B3, as built").
+#   2026-10-01 (feature/hps-b4, d3087fb: no RTL change, CORE_VERSION dev-hpsb4) SWEEP (A2): 5 of 5 PASS -- SEED 3
+#     89.13/88.86 (37,181 ALM), 1 90.01/89.49, 5 88.57/90.05, 7 88.33/86.83, 11 89.86/89.60 (clk_dec 100C/-40C).
+#     SEED 11 PINNED: UMD_hpsb4_sweep_20261001_1350.rbf (37,163 ALM, 89 %, M10K 443, DSP 81).
+#   2026-10-01 (feature/480i, b8dee01: S1, the 480i raster + field order, docs/analog.md): SEED 11 first roll
+#     PASS 89.97/89.49, ALM 37,560 (90 %, +397), DSP 83 (+2); clk_mem -0.092 ns 100C (the reader's new request
+#     fields unbounded in umd.sdc). UMD_480i_20261001_1541.rbf -- the S1 rig round (analog.md S6).
+#   2026-10-01 (feature/480i, b2e6238: + umd.sdc bounds them): SEED 11 PASS 88.11/88.71, ALM 37,560, clk_mem
+#     95.24/94.64, every core clock positive. UMD_480i_20261001_1602.rbf. (The sweep is S2's final netlist.)
+#   2026-10-01 (feature/480i, d4a2362: S2, Analog Aspect): SEED 11 first roll PASS 93.21/92.76, ALM 37,612 (90 %,
+#     +52), DSP 86, clk_mem 98.79/95.88. UMD_480i_20261001_1625.rbf -- the S2 rig round.
+#     SWEEP (A2) on d4a2362: 6 of 6 PASS -- SEED 1 90.16/91.02, 3 91.67/88.66, 5 88.72/88.53, 7 91.14/92.20,
+#     9 92.37/90.11, 11 93.21/92.76 (clk_dec 100C/-40C). SEED 11 STAYS PINNED: UMD_480i_20261001_1625.rbf (the
+#     rig-checked build; 37,612 ALM, 90 %, DSP 86).
+#   2026-10-01 (feature/480i, a02466d: the HUD inside title safe at 480i + the message strip, analog.md V12):
+#     SEED 11 PASS 89.37/86.42, ALM 37,829 (90 %, +217), DSP 86, clk_mem 96.90/96.62.
+#     UMD_480i_20261001_2203.rbf -- ACCEPTED by the maintainer as is (HW-confirmed on the CRT); SEED 11 stays
+#     pinned. A sweep was started (0.42 MHz cold margin) and stopped at their call after SEED 1 (90.63/89.15).
+#   2026-10-02 (feature/p9-menus, 5899676: P9 M2 items 1-5 -- NAV_PLAY, the host rows, PLAYLIST / SUB_SET, the
+#     button gate, the plane hand-over, the sound one-shot): SEED 11 first roll PASS 90.19/90.11, ALM 38,855
+#     (93 %, +1,026), RAM 445, DSP 86, clk_mem 95.53/96.78, every core-PLL clock positive; pll_hdmi -1.94/-2.20 ns
+#     (was -0.12/-0.42: framework domain, no emu logic -- to check on the rig's HDMI). A2': no sweep (4.1 MHz
+#     margin, 93 % <= 95 %). UMD_p9_20261002_0426.rbf -- not rig-checked (menus need M3's UMD Main).
+#   2026-10-02 (feature/p9-menus, b8ae6ef: + item 6, the video window in disp_reader): SEED 11 PASS 89.46/89.17,
+#     ALM 39,097 (93 %, +242), RAM 445, DSP 88, every core-PLL clock positive. pll_hdmi -2.52 ns (TNS -197; was
+#     -0.12 at 480i, -1.94 at items 1-5): ascal's own o_vacpt -> o_adrs_pre at 6.73 ns (148.5 MHz, 1080p), no emu
+#     logic -- the stock scaler's tight path worsening with the device's density. MUST be checked on the rig's
+#     HDMI at 1080p before this build is trusted. A2': no sweep (3.2 MHz). UMD_p9_20261002_0527.rbf.
+#     RIG 2026-10-02: HDMI 1080p60 captured, Akira paused, 3,585 frames identical (tools/hdmi_still.py): trusted.
+#   2026-10-02 (feature/p9-menus, 44f65af: + the OSD's Menu Language O[14:11], CONF_STR only -- nothing in the
+#     fabric reads it): SEED 11 PASS 89.38/88.45, ALM 39,056 (93 %), DSP 88, every core-PLL clock positive (clk_mem
+#     93.9/93.1); pll_hdmi -2.06/-2.38 ns (better than the rig-trusted -2.52). A2': no sweep (2.45 MHz, 93 %).
+#     UMD_p9_20261002_1848.rbf.
+#   2026-10-02 (feature/p9-menus: + the aspect under a menu -- Auto 16:9 and Analog Aspect Fit with host_menu,
+#     HOST_RD's AUDIO word [14:13] the shown picture's aspect): SEED 11 PASS 89.29/87.69, ALM 39,061 (93 %), RAM 445,
+#     DSP 88, every core-PLL clock positive; pll_hdmi -2.22/-2.48 ns (within the rig-trusted -2.52). A2': no sweep
+#     (1.69 MHz, 93 %). UMD_p9_20261002_2133.rbf.
+#   2026-10-02/03 (feature/p9-menus, 9761fd3: + the video window halving a field store's position): SEED 11
+#     MISSED 85.32/85.73 (UMD_p9_MARGINAL_20261002_2329.rbf) -> A2' sweep SEEDS "1 3 5 7 9": 5 of 5 PASS -- 1
+#     90.42/88.87, 3 88.50/87.61, 5 90.75/91.55, 7 88.87/86.33, 9 92.75/92.60. SEED 9 PINNED: ALM 39,109 (93 %),
+#     every core-PLL clock positive, pll_hdmi -1.86/-2.06 ns (within the rig-trusted -2.52). UMD_p9fld_20261003_0052.rbf.
+#   2026-10-03 (feature/p9-menus, 5cb681d: the third rig session -- host_mute, menu_aa, the Select/Pause CONF_STR):
+#     SEED 9 PASS 91.20/87.29, ALM 39,153 (93 %), UMD_p9_20261003_0215.rbf -> A2' (1.29 MHz cold) sweep SEEDS
+#     "1 3 5 7" (stops at the first pass): 1 MISSED 88.27/84.83, 3 PASS 91.57/90.66. SEED 3 PINNED: ALM 39,171
+#     (93 %). UMD_p9s3sweep_20261003_0304.rbf.
+#   2026-10-03 (feature/p9-menus, M3b: Disc Menus O[15] behind h1 = host_ok): SEED 3 PASS 90.61/89.90, ALM 39,125
+#     (93 %). A2': no sweep (3.9 MHz, 93 %). UMD_p9_20261003_1237.rbf.
+#   2026-10-03 (feature/p9-m4, 6bef78f: CORE_VERSION dev-p9m4, emu's show_pic + host_ui -- a menu over a stopped
+#     player): SEED 3 MISSED 70.39/69.99 (UMD_p9m4_MARGINAL_20261003_1541.rbf; the CONF_STR change re-rolled it)
+#     -> A2' sweep SEEDS "9 11 5 1 7" (stops at the first pass): 9 PASS 90.56/92.17. SEED 9 PINNED: ALM 39,171
+#     (93 %), RAM 445, DSP 87, every core-PLL clock positive. UMD_p9m4_20261003_1559.rbf.
+#   2026-10-03 (feature/drop-diag-hud, A11: the diagnostic HUD removed, telemetry +3 words, "cannot be played"):
+#     SEED 9 PASS 89.69/90.01, ALM 37,754 (90 %, -1,417), M10K 438, DSP 87. A2': no sweep (3.7 MHz, 90 %).
+#     UMD_nohud_20261003_2040.rbf.
+#   2026-10-03 (feature/p6c-goto, dev-goto: Go To in fabric -- goto_ctl, NAV_TIME, player_ctl's TIME + query port,
+#     the HUD's editor): SEED 9 PASS 90.52/89.12, ALM 38,782 (93 %, +1,028 of the 1,500 cap; goto_ctl 497),
+#     A2': no sweep (3.1 MHz, 93 %). UMD_goto_20261003_2340.rbf.
+#   2026-10-04 (feature/p6c-goto, 8d65e86: a TIME past the end lands with no skip -- the rig's freeze): SEED 9
+#     PASS 91.96/89.45, ALM 38,772 (93 %). A2': no sweep. UMD_goto_20261004_0031.rbf.
+#   2026-10-04 (feature/p6c-goto, 9915325: a disc's SUB_SET event marked, the HUD's tag only for the button):
+#     SEED 9 PASS 92.29/92.24, ALM 38,755 (92 %). A2': no sweep. UMD_goto_20261004_0409.rbf.
+#   2026-10-04 (fix/skip-last-picture, d0f17b5, dev-skipend: the seek clamp OUT - 4, disp_ctl takes an END inside a
+#     skip): SEED 9 PASS 91.42/91.83, ALM 38,837 (93 %, +82). A2': no sweep (5.4 MHz, 93 %). UMD_skipend_20261004_1859.rbf.
+#   2026-10-04 (fix/skip-last-picture, 0455bc8: player_ctl completes a landing on `ended`, TITLE_END at rest): SEED 9
+#     PASS 87.43/86.11, ALM 38,815 (93 %). Margin 0.11 MHz cold: A2' called for a sweep; the maintainer: passed timing ->
+#     no sweep (stopped after SEED 1 PASS 89.14/90.35, SEED 3 PASS 88.94/88.68, not packed). UMD_skipend_20261004_2035.rbf.
+#   2026-10-05 (feature/hps-panel, a9383cf, dev-panel: P6d C3 -- the press record, ui_sub + planes 2 / 3, the panel
+#     messages, Repeat -> Control Panel in CONF_STR): SEED 9 MISSED 85.86/85.40, ALM 38,832 (93 %, +17)
+#     (UMD_panel_MARGINAL_20261005_0247.rbf) -> A2' sweep SEEDS "1 3 5 7 11" (stops at the first pass): 1 PASS
+#     87.79/87.52. SEED 1 PINNED: ALM 38,732 (92 %), RAM 438, DSP 88. UMD_panel_20261005_0314.rbf (its manifest's
+#     dirty flag: Main-side files edited during the sweep; the netlist is a9383cf's -- package_release.sh
+#     refuses a dirty manifest: refit at a clean commit before any release).
+#   2026-10-05 (feature/hps-panel, 172718a: Audio / Subtitle show the current track first -- the maintainer's test):
+#     SEED 1 PASS 88.04/87.82, ALM 38,676 (92 %), RAM 438, DSP 88. A2': no sweep (1.8 MHz, 92 %). Clean tree.
+#     UMD_panel_20261005_0444.rbf.
+#   2026-10-05 (feature/retime-harvest, 7a3bfe5, dev-retime: A9, the H264 fork's zero-cycle clk_dec retimes): SEED 1
+#     PASS 89.66/89.53 (P6d 88.04/87.82 at the same seed), ALM 38,725 (92 %), RAM 438, DSP 88,
+#     UMD_retime_20261005_1353.rbf (manifest dirty: docs/harvest.md only). clk_sys -2.6 ns at -40 C, every path
+#     sub_flip's k_* (P6d's kept request, missing from umd.sdc's 8 ns bound) -> bounded, 5cda401.
+#   2026-10-05 (5cda401, the sdc fix; A9's sweep, SEEDS "1 3 5 9 11" SWEEP_ALL=1, the roadmap's): 5 of 5 PASS --
+#     1 88.18/90.88, 3 86.50/88.04, 5 89.50/89.05, 9 88.57/87.63, 11 86.39/88.09. SEED 5 PINNED: ALM 38,728 (92 %),
+#     RAM 438, DSP 88; clk_sys +0.64, clk_mem +0.82, clk_dec +1.12 ns at -40 C (pll_hdmi -2.43, ascal's: the
+#     framework, under the -2.52 checked on HDMI). UMD_retime_20261005_1520.rbf, clean tree.
+#   2026-10-05 (feature/bare-streams, e57eff2, dev-bare: P8 bare .MPS, the first version): SEED 5 PASS
+#     87.51/88.72, ALM 39,627 (95 %), RAM 438, DSP 88; umd_reader 4,016 (+519: a setup state writing ~40
+#     registers). UMD_bare_20261005_1833.rbf -- superseded, not shipped (docs/bare_streams.md §3).
+#   2026-10-05 (feature/bare-streams, 3fc660d, dev-bare: the bare path's area rework): SEED 5 PASS
+#     89.99/89.29, ALM 39,127 (93 %, +399 over A9), RAM 438, DSP 88; umd_reader 3,749 (+252),
+#     player_ctl 1,406, transport_hud 1,059, ps_demux 141. UMD_bare_20261005_1945.rbf (manifest dirty:
+#     the manual's error 12 line only).
+#   2026-10-06 (feature/analog-dither, 28a9700, dev-dither: Analog Dither, O[16], DVD's dac_dither in sys_top):
+#     SEED 5 first roll PASS 92.44/91.42, ALM 39,291 (94 %; dac_dither itself 17), RAM 438, DSP 88.
+#     UMD_dither_20261007_0110.rbf.
+#   2026-10-07 (fix/item-start-refusal, 8d57af6, dev-itemstart: recon_top's rz_dbg latch -> four
+#     telemetry words, P8's item-start refusal diagnosis): SEED 5 PASS 89.70/90.15, ALM 39,104 (93 %),
+#     RAM 438, DSP 88. UMD_itemstart_20261007_0234.rbf, clean tree. Superseded (the instrumentation backed out:
+#     the "refusal" was the telemetry's word 63, below).
+#   2026-10-07 (fix/item-start-refusal, 78d2ed5, dev-itemstart: umd_telem's 7-bit word index): SEED 5 clk_dec
+#     PASS 89.44/89.65, ALM 39,380 (94 %); clk_mem -0.065 ns at -40 C (89.48 MHz: a miss on a core clock --
+#     a 5-seed sweep owed, A2'). UMD_itemstart_20261007_0341.rbf, clean tree; on the rig (.236) refused / warn /
+#     subs read 0 on the 30-item title across two item starts, pdefer 1 -> 2: the fix confirmed.
+#   2026-10-07 (the same netlist, 69eb4eb): the owed sweep (seeds 1 3 9 11 13; the sweep stops at the first
+#     pass): SEED 1 PASS clk_dec 91.60/91.71, clk_mem 96.54/94.29 (no negative slack on any core clock).
+#     SEED 1 PINNED. build_release at the pin (b43512d) reproduces it: 91.60/91.71, clk_mem 94.29 at -40 C,
+#     ALM 39,449 (94 %), RAM 438, DSP 88. UMD_itemstart_20261007_0429.rbf, clean tree.
+#   2026-10-07 (fix/item-start-refusal merged with main's Analog Dither, PR fj#56; 9390727, dev-itemstart): the
+#     combined netlist at the pinned SEED 1 PASS clk_dec 90.93/91.49, clk_mem 92.95 at -40 C (no negative slack),
+#     ALM 39,404 (94 %). UMD_itemstart_20261007_0518.rbf, clean tree. SEED 1 stays pinned.
+#   2026-10-07 (feature/nav-engine, 335a5ba, dev-naveng: A12 N3, the reader's parse on the navigation
+#     engine, docs/nav_engine.md): SEED 5 PASS 89.72/89.06, ALM 36,384 (87 %, -2,743), RAM 452 (+14),
+#     DSP 88; umd_reader 1,002 (-2,747; the engine nav_seq 471). UMD_naveng_20261007_0425.rbf, clean tree.
+#   2026-10-07 (feature/nav-engine, 52f18d8's RTL -- built from cf98052 + it, manifest dirty -- dev-naveng:
+#     A12 SD1-SD3, the subtitle decode back in fabric): SEED 5 PASS 91.83/92.09, ALM 39,117 (93 %, +2,733 over
+#     N3; -10 against P8's 39,127 without it), RAM 503 (+51), DSP 91 (+3); sub_dec 2,582, sub_overlay 4,275,
+#     umd_reader 1,016, umd_host 650. UMD_naveng_20261007_0601.rbf.
+#   2026-10-07 (feature/nav-engine merged with main 5ba3615 -- PR fj#56 Analog Dither, PR fj#58 the telemetry
+#     word index; eb41c95, dev-naveng): at the pinned SEED 1 clk_dec PASS 89.68/89.79 but clk_mem -0.027 ns at
+#     -40 C (89.78 MHz: a miss on a core clock) on sub_mem's held write data -> ddr_mux2's command compare ->
+#     sub_q's dout_valid (the path 78d2ed5 missed on before SD1). ALM 39,351 (94 %), RAM 503, DSP 90.
+#     UMD_naveng_20261007_0655.rbf (not shipped). A2' sweep SEEDS "3 5 9 11 13", stopping at the first pass,
+#     the sweep now failing a seed on any core clock's negative slack (53a0b98): SEED 3 PASS clk_dec
+#     90.58/86.96, clk_mem 96.42/96.48, no negative slack. SEED 3 PINNED: ALM 39,425 (94 %), RAM 503, DSP 90.
+#     UMD_naveng_20261007_0726.rbf.
+#   2026-10-07 (fix/pause-trick, 3b98bbe, dev-pausetrick: fj#57, PAUSE in trick play plays): SEED 3 PASS
+#     clk_dec 92.64/90.79, clk_mem 96.16/94.49, no negative slack. ALM 39,345 (94 %), RAM 503, DSP 90.
+#     UMD_pausetrick_20261007_1549.rbf, clean tree.
+#   2026-10-07 (feature/ab-repeat, 354e14d, dev-abrepeat: A-B Repeat -- ab_ctl, the HUD's tag, the loop's
+#     masks; docs/ab_repeat.md): SEED 3 PASS clk_dec 91.6/88.72, clk_mem 94.75/95.13. ALM 39,507 (94 %,
+#     +162 over fix/pause-trick's 39,345), RAM 503, DSP 90. The router's first pass missed 4 signals
+#     (recon_inter / dpb_mem) and its retry routed. UMD_abrepeat_20261007_2225.rbf, clean tree.
+#   2026-10-08 (fix/select-button, b3b09ea, dev-select: Select (x) issues PLAYPAUSE, J1 renamed; CONF_STR
+#     changed, the seed re-rolled): SEED 3 PASS clk_dec 88.62/88.29, clk_mem 97.61/94.87. ALM 39,566 (94 %,
+#     +59 over dev-abrepeat), RAM 503, DSP 90. UMD_select_20261008_0102.rbf, clean tree.
+#   2026-10-08 (fix/reset-stale-chapter, afe0522, dev-resetfix: fj#64 nav_seq resets to the STOP vector; fj#76
+#     UMD Main only): at the pinned SEED 3 clk_dec PASS 90.38/88.82 but clk_mem -0.045 ns at -40 C (a miss on
+#     a core clock). ALM 39,512 (94 %), RAM 503, DSP 90. UMD_resetfix_20261008_0450.rbf (not shipped).
+#     Sweep SEEDS "5 9 11 13 1", first pass: SEED 5 PASS clk_dec 91.45/89.41, clk_mem 94.86/95.17, no
+#     negative slack. SEED 5 PINNED: ALM 39,503 (94 %). UMD_resetfix_20261008_0525.rbf (the sweep at c5648f0,
+#     clean tree: the same netlist as afe0522, docs only between).
+#   2026-10-09 (feature/telecine-model, cb1a505, dev-telecine: fj#80 field matching -- film_lock, disp_ctl's
+#     partner hold, disp_reader's partner fetch + comb sums, telemetry `film`; docs/telecine.md S5): at the
+#     pinned SEED 5 PASS clk_dec 90.76/89.11, clk_mem 94.86/95.63, no negative slack. ALM 39,718 (95 %,
+#     +215 over dev-resetfix's 39,503; synth_unit est. +242), RAM 503, DSP 92. UMD_telecine_20261009_0424.rbf.
+#   2026-10-09 (feature/zoom, 828efb6, dev-zoom: fj#71 Zoom -- zoom_ctl, the DE window and RGB blank, the HUD's
+#     safe layout, the subtitle clamp; docs/zoom.md): at the pinned SEED 5 PASS clk_dec 88.50/88.07, clk_mem
+#     96.09/95.04, no negative slack on a core clock. ALM 40,948
+#     (98 %) -- NOT +1,230 of logic: combinational ALUTs 62,131 -> 62,339 (+208), registers +7, ALMs placed [A]
+#     41,202 -> 41,107; the fitter's "recoverable by dense packing" estimate fell 2,096 -> 786 (main refitted at
+#     SEED 5 reproduces 39,718; docs/zoom.md S6.1). RAM 503, DSP 92. UMD_zoom_20261009_2050.rbf, clean tree.
+
+set_global_assignment -name TOP_LEVEL_ENTITY sys_top
+set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0
+set_global_assignment -name PROJECT_CREATION_TIME_DATE "22:30:00  SEPTEMBER 22, 2026"
+set_global_assignment -name LAST_QUARTUS_VERSION "17.0.2 Lite Edition"
+set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
+set_global_assignment -name MIN_CORE_JUNCTION_TEMP "-40"
+set_global_assignment -name MAX_CORE_JUNCTION_TEMP 100
+set_global_assignment -name ERROR_CHECK_FREQUENCY_DIVISOR 256
+
+# ---- core sources (umd/) --------------------------------------------------------------
+set_global_assignment -name SEARCH_PATH umd
+set_global_assignment -name SYSTEMVERILOG_FILE umd/emu.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sys_pll.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sync_gen.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/csync_smpte.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/xmb_wave.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/dec_stub.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ddr_arb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/nav/nav_seq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/umd_reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ps_stream_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ps_demux.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/transport_hud.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/fifo_dc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/vidfeed_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/h264_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/nal_parser.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/rbsp_reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/sps_pps.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/slice_hdr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/cabac_ctx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/cabac_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/mb_syntax.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/au_pts.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/sei_pt.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/h264_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sfifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/dpb_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/dsf_calc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_hdr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_dpb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_lists.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_slice_tab.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/mb_intake.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/mv_pred.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/mc_interp.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/wpred.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_inter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/intra_pred.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/dequant_itrans.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/deblock_bs.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/deblock_filter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_deblock.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_mb.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/h264/recon_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/recon_out.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/dac_dither.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ddr_mux2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/disp_reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/disp_sched.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/film_lock.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/disp_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/player_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/goto_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ab_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/zoom_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/kbd_map.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/ddr_probe.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/umd_telem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/umd_host.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/pcm_shot.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/aspect_vui.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/se_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/at3p/at3p_seq.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/at3p/at3p_vec.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/at3p/at3p_top.sv
+# P7 subtitles (docs/subtitles.md, docs/compositor.md): the chain and the plane compositor. The PNG decoder
+# (umd/png/, docs/png_decode.md) left the netlist with A7's B3 (the UMD Main decoded) and is back with
+# A12 SD1 (docs/nav_engine.md §10): umd/sub/sub_dec.sv answers sub_top's handshake in the fabric
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/png_pkg.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/inflate.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/png_chunks.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/png_unfilter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/png_pixel.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/png/png_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_png.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_plane_wr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_dec.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_q.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_in.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_unit.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_ring.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_sched.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_mem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_top.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_flip.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/rd_merge2.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/plane_reader.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/plane_blend.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/sub/sub_overlay.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/aud_ring.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/aud_out.sv
+set_global_assignment -name SYSTEMVERILOG_FILE umd/vbuf.sv
+set_global_assignment -name SDC_FILE umd/umd.sdc
+
+# ---- MiSTer framework (sys/) ------------------------------------------------------------
+source sys/sys.tcl
+set_global_assignment -name PRE_FLOW_SCRIPT_FILE "quartus_sh:sys/build_id.tcl"
+set_global_assignment -name CDF_FILE jtag.cdf
+set_global_assignment -name QIP_FILE sys/sys.qip
+source sys/sys_analog.tcl
+
+# ---- build settings ---------------------------------------------------------------------
+set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
+set_global_assignment -name PARTITION_FITTER_PRESERVATION_LEVEL PLACEMENT_AND_ROUTING -section_id Top
+set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
+set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
+# QUARTUS=1: umd/sys_pll.sv wraps its altera_pll in `ifdef QUARTUS (sim gets a pass-through).
+set_global_assignment -name VERILOG_MACRO "QUARTUS=1"
+# No HPS audio mixing: frees the f2sdram ram2 port for the core (docs/hw_budget_and_lessons.md).
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL NORMAL
+set_global_assignment -name SEED 5
