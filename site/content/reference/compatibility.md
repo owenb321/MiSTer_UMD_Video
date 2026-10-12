@@ -75,9 +75,11 @@ through it.
 Colour is stored at half the picture's resolution, as in all H.264 video. The core blends
 it smoothly between the stored samples at the standard position (every UMD Video disc uses
 it). A stream that declares another position (none has been found) shows its colour half a
-pixel off. On interlaced pictures and on the 480i output the colour is blended only along
-each line. Under **Crop** in [Analog Aspect](../playback/settings.md) and inside a disc
-menu's video window it is shown as stored.
+pixel off. Interlaced pictures are blended within each field, at the field's own colour
+positions, when shown with **Weave** (and when film stored as fields is shown whole); with
+**Bob** or **Blend**, and on the 480i output, the colour is blended only along each line.
+Under **Crop** in [Analog Aspect](../playback/settings.md) and inside a disc menu's video
+window it is shown as stored.
 
 ## Audio
 

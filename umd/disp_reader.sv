@@ -72,9 +72,21 @@
 //     (3 h[m] + h[m + 1] + 2) >> 2: the neighbour is row a's chroma on an even line, row d's on
 //     an odd one -- both in the ring; the chroma d copy reads row a's slot on an even line (a frame
 //     store's kernel is b, so nothing else reads it), and the edges' mirror makes it row m itself.
-// A field store keeps its chroma rows nearest vertically (its a / d are the OTHER field's), its
-// kernels run on the interpolated rows. Crop and the video window keep their own taps (their
-// positions are fractional). No RAM, no multiplier, LAT unchanged.
+// Crop and the video window keep their own taps (their positions are fractional). No RAM, no
+// multiplier, LAT unchanged.
+//
+// A FIELD STORE'S VERTICAL STEP (docs/display.md S13): a field store's rows a / d are the OTHER
+// field's, so its line's vertical neighbour -- its OWN field's chroma row above (an even field line
+// 2m: row m - 1) or below (an odd one 2m + 1: row m + 1), the field's first / last row itself -- is
+// two frame lines away, a line the ring of four no longer (or not yet) holds. So the 480p fetch of a
+// field store's line brings that row too (req_nb: planes 3 / 4, the set-up run a second time; the
+// store row is the line's own +- 2, or the same at the field's edges), into the neighbour RAMs beside
+// the line's slot (even / odd halves, row b's addresses). Where the line is shown as stored -- Weave
+// and the film weave, i.e. kernel b and not a bob -- its chroma is blended with it at H.264's field
+// siting (Figure E-1: a field's row m a quarter / three quarters of the way down its line pair, the
+// progressive positions): 7/8 + 1/8 on the line nearer its row, 5/8 + 3/8 on the other. Bob and
+// Blend keep their kernels on the horizontal rows.
+// 480i and the window fetch no neighbour (+4 M10K; a field title's 480p line reads 2W words more).
 //
 // 480i (`il`, docs/analog.md S2-S3): h_pos counts DOTS (a pixel is two: x = h_pos >> 1) and
 // v_pos is the frame line {field line i, raster parity q}. The deinterlacer is off (a CRT
@@ -195,7 +207,9 @@ module disp_reader #(
     logic [31:0] cbe_b [0:255], cbo_b [0:255], cbe_d [0:255], cbo_d [0:255];
     logic [63:0] crbuf_a [0:255];
     logic [31:0] cre_b [0:255], cro_b [0:255], cre_d [0:255], cro_d [0:255];
-    logic        lb_we_y, lb_we_cb, lb_we_cr;
+    // (A FIELD STORE'S VERTICAL STEP) the neighbour row of each slot's line, even / odd halves
+    logic [31:0] cbe_n [0:255], cbo_n [0:255], cre_n [0:255], cro_n [0:255];
+    logic        lb_we_y, lb_we_cb, lb_we_cr, lb_we_cbn, lb_we_crn;
     logic [8:0]  lb_waddr;
     logic [63:0] lb_wdata;
     wire  [31:0] lb_we = {lb_wdata[55:48], lb_wdata[39:32], lb_wdata[23:16], lb_wdata[7:0]};    // samples 0 2 4 6
@@ -213,6 +227,8 @@ module disp_reader #(
             crbuf_a[lb_waddr[7:0]] <= lb_wdata;
             cre_b[lb_waddr[7:0]] <= lb_we; cro_b[lb_waddr[7:0]] <= lb_wo; cre_d[lb_waddr[7:0]] <= lb_we; cro_d[lb_waddr[7:0]] <= lb_wo;
         end
+        if (lb_we_cbn) begin cbe_n[lb_waddr[7:0]] <= lb_we; cbo_n[lb_waddr[7:0]] <= lb_wo; end
+        if (lb_we_crn) begin cre_n[lb_waddr[7:0]] <= lb_we; cro_n[lb_waddr[7:0]] <= lb_wo; end
     end
 
     // ---- clk_sys: the requests and the read-out -----------------------------------------------
@@ -226,6 +242,7 @@ module disp_reader #(
     logic [1:0]  req_slot;                 // the first line's ring slot
     logic        req_first;
     logic        req_alt;                  // fj#80: the line comes from the partner store (pic_pstore)
+    logic        req_nb;                   // (S13) fetch the line's field neighbour chroma row too (480p, a field store)
     logic [1:0]  k_mode;                   // the deinterlace mode, latched once a frame
     // ---- the 480i walker (docs/analog.md S3; see the header): per field line j, the source
     // field line s, the weight k (sixths) of s + 1 and whether the line is shown (Letterbox's
@@ -373,7 +390,7 @@ module disp_reader #(
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             req_tog <= 1'b0; req_line <= '0; req_line1 <= '0; req_n <= 1'b0; req_slot <= '0; req_first <= 1'b0;
-            req_alt <= 1'b0;
+            req_alt <= 1'b0; req_nb <= 1'b0;
             k_mode <= 2'd0;
             f_q <= 1'b0; f_ps <= 1'b0; f_aa <= 2'd0; f_last <= '0; f_have <= '0; widx <= '0;
             w_s <= '0; w_r <= '0; w_band <= 1'b0;
@@ -382,7 +399,7 @@ module disp_reader #(
             cur_sb <= '0; cur_sd <= '0; nxt_sb <= '0; nxt_sd <= '0; cur_wf <= '0; nxt_wf <= '0; cur_wi <= 1'b0; nxt_wi <= 1'b0;
         end else if (fw_on) begin
             // ---- the video window: both rasters ----
-            req_alt <= 1'b0;
+            req_alt <= 1'b0; req_nb <= 1'b0;
             if (wstep) begin
                 if (wini) wq <= nq;
                 else begin cur_sb <= nxt_sb; cur_sd <= nxt_sd; cur_wf <= nxt_wf; cur_wi <= nxt_wi; end
@@ -415,6 +432,7 @@ module disp_reader #(
                 // the last, 480 -- the clipped line 479's d, fetched only when the picture has
                 // it -- at 478: before the line-500 release, disp_ctl)
                 req_n <= 1'b0;
+                req_nb <= pic_field;           // (S13) a field store's line brings its neighbour row
                 // fj#80: a line of the other parity than the shown field's comes from the partner
                 if (v_pos == 12'd523) begin
                     req_line <= 10'd0; req_slot <= 2'd0; req_first <= 1'b1; req_tog <= !req_tog;
@@ -428,7 +446,7 @@ module disp_reader #(
                 end
             end
         end else if (h_pos == 12'd1440 && (ini || v_pos == 12'd523 || v_pos == 12'd524 || fl < 11'd240)) begin
-            req_alt <= 1'b0;
+            req_alt <= 1'b0; req_nb <= 1'b0;
             if (ini) begin
                 f_q <= nq; f_ps <= n_ps; f_aa <= n_aa; f_last <= n_last;
                 k_mode <= deint_mode;          // (unused at 480i -- `kern` is the walker's -- but kept
@@ -462,6 +480,7 @@ module disp_reader #(
     logic [2:0]  m_tog;
     logic [9:0]  m_line_q, m_line1_q;
     logic        m_n_q, m_first;
+    logic        m_nb_q;                   // (S13) the request asks for its field neighbour row
     logic [1:0]  m_slot_q;
     logic [4:0]  m_store;
     logic [7:0]  m_w, m_hf;
@@ -514,12 +533,18 @@ module disp_reader #(
     wire  [10:0] ca_l = {pic_w_mbs, 3'd0} - 11'd1;
     wire  [8:0]  ca   = (ca_u > ca_l) ? ca_l[8:0] : ca_u[8:0];
     wire  [1:0]  bk_dc = (ch_v && !v_pos[0]) ? bk_a : bk_d;         // the chroma d copy's slot
+    // (A FIELD STORE'S VERTICAL STEP) a field store's line shown as stored (Weave, the film weave);
+    // not a bob's kept line. (kern 0 restates it: Blend's and the bob's rebuilt lines take their
+    // kernel's chroma first in uk / vk.)
+    wire         ch_f = !il && !fw_on && pic_field && !bob && (kern == 2'd0);
     logic [63:0] q_ya, q_cba, q_cra;
     logic [31:0] q_ybe, q_ybo, q_yde, q_ydo, q_cbbe, q_cbbo, q_cbde, q_cbdo, q_crbe, q_crbo, q_crde, q_crdo;
     logic [2:0]  s1_by, s1_bc;
     logic [1:0]  s1_le, s1_lo, s1_lce, s1_lco;
     logic [3:0]  s1_f, s1_wf, s1_fc;       // (s1_fc: chroma's horizontal weight, sixteenths)
     logic        s1_cx, s1_cv;             // (CHROMA INTERPOLATED) an odd column's blend; the frame's vertical step
+    logic        s1_cf, s1_cfn;            // (S13) a field store's vertical step; the line nearer its row (7/8)
+    logic [31:0] q_cbne, q_cbno, q_crne, q_crno;   // the line's neighbour row (row b's addresses)
     logic [7:0]  p_ua, p_va;               // row a's previous dot (the left neighbour of an odd column)
     logic        s1_win;
     logic        s1_t0o, s1_c0o;
@@ -544,6 +569,8 @@ module disp_reader #(
         q_cbde <= cbe_d[{bk_dc, c_e[8:3]}]; q_cbdo <= cbo_d[{bk_dc, c0[8:3]}];
         q_crbe <= cre_b[{bk_b, c_e[8:3]}]; q_crbo <= cro_b[{bk_b, c0[8:3]}];
         q_crde <= cre_d[{bk_dc, c_e[8:3]}]; q_crdo <= cro_d[{bk_dc, c0[8:3]}];
+        q_cbne <= cbe_n[{bk_b, c_e[8:3]}]; q_cbno <= cbo_n[{bk_b, c0[8:3]}];
+        q_crne <= cre_n[{bk_b, c_e[8:3]}]; q_crno <= cro_n[{bk_b, c0[8:3]}];
     end
     // stage 2: the taps out of the halves (the lane: the sample's bits [2:1])
     wire  [7:0]  yb_e = q_ybe[8*s1_le +: 8],   yb_o = q_ybo[8*s1_lo +: 8];
@@ -560,6 +587,11 @@ module disp_reader #(
     wire  [7:0]  ud  = s1_c0o ? ud_o : ud_e,   ud1 = !s1_t0o ? ud : (s1_c0o ? ud_e : ud_o);
     wire  [7:0]  vb  = s1_c0o ? vb_o : vb_e,   vb1 = !s1_t0o ? vb : (s1_c0o ? vb_e : vb_o);
     wire  [7:0]  vd  = s1_c0o ? vd_o : vd_e,   vd1 = !s1_t0o ? vd : (s1_c0o ? vd_e : vd_o);
+    // (S13) the neighbour row's two taps, as row b's
+    wire  [7:0]  un_e = q_cbne[8*s1_lce +: 8], un_o = q_cbno[8*s1_lco +: 8];
+    wire  [7:0]  vn_e = q_crne[8*s1_lce +: 8], vn_o = q_crno[8*s1_lco +: 8];
+    wire  [7:0]  un  = s1_c0o ? un_o : un_e,   un1 = !s1_t0o ? un : (s1_c0o ? un_e : un_o);
+    wire  [7:0]  vn  = s1_c0o ? vn_o : vn_e,   vn1 = !s1_t0o ? vn : (s1_c0o ? vn_e : vn_o);
     wire  [7:0]  ya = q_ya[8*s1_by +: 8];
     wire  [7:0]  ua = q_cba[8*s1_bc +: 8];
     wire  [7:0]  va = q_cra[8*s1_bc +: 8];
@@ -575,7 +607,7 @@ module disp_reader #(
         endcase
         if (s1_win) w6 = {s1_wf, 4'd0};      // the window: sixteenths, x 16 (Q8)
     end
-    logic [7:0]  hyb, hyd, hub, hud, hvb, hvd, iy, iu, iv;
+    logic [7:0]  hyb, hyd, hub, hud, hvb, hvd, hun, hvn, iy, iu, iv;
     logic signed [9:0]  dh;
     logic signed [13:0] ht, hs;
     logic signed [10:0] hsum;
@@ -594,6 +626,7 @@ module disp_reader #(
         `DR_HB(hyb, yb, yb1, s1_f) `DR_HB(hyd, yd, yd1, s1_f)
         `DR_HB(hub, ub, ub1, s1_fc) `DR_HB(hud, ud, ud1, s1_fc)
         `DR_HB(hvb, vb, vb1, s1_fc) `DR_HB(hvd, vd, vd1, s1_fc)
+        `DR_HB(hun, un, un1, s1_fc) `DR_HB(hvn, vn, vn1, s1_fc)
         `DR_VB(iy, hyb, hyd) `DR_VB(iu, hub, hud) `DR_VB(iv, hvb, hvd)
     end
     `undef DR_HB
@@ -612,6 +645,15 @@ module disp_reader #(
     // chroma row (the d copy: row a's slot on an even line, row d's on an odd one)
     wire  [9:0]  uy = {1'b0, hub, 1'b0} + {2'd0, hub} + {2'd0, hud} + 10'd2;
     wire  [9:0]  vy = {1'b0, hvb, 1'b0} + {2'd0, hvb} + {2'd0, hvd} + 10'd2;
+    // (S13) a field store's: H.264 Figure E-1 sites a field's chroma row m a quarter (top field) or
+    // three quarters (bottom) of the way from its field line 2m to 2m + 1 -- the progressive positions,
+    // field by field -- so the line nearer its row (field line parity = field parity: frame line bits
+    // [1] == [0], s1_cfn) takes (7 own + n + 4) >> 3, the other (5 own + 3 n + 4) >> 3; n the line's
+    // neighbour row, fetched with it
+    wire  [10:0] uf = s1_cfn ? ({hub, 3'b000} - {3'd0, hub} + {3'd0, hun} + 11'd4)
+                             : ({1'b0, hub, 2'b00} + {3'd0, hub} + {2'd0, hun, 1'b0} + {3'd0, hun} + 11'd4);
+    wire  [10:0] vf = s1_cfn ? ({hvb, 3'b000} - {3'd0, hvb} + {3'd0, hvn} + 11'd4)
+                             : ({1'b0, hvb, 2'b00} + {3'd0, hvb} + {2'd0, hvn, 1'b0} + {3'd0, hvn} + 11'd4);
     wire         two = il || s1_win;      // the walkers' two-tap path (480i, the window)
     // fj#80: one dot's comb terms, |2b - a - d| and |a - d| (the window's raw luma)
     wire signed [10:0] cm_s = $signed({2'b0, yb, 1'b0}) - $signed({3'b0, ya}) - $signed({3'b0, yd});
@@ -619,8 +661,8 @@ module disp_reader #(
     wire  [8:0]  cr_s = {1'b0, ya} - {1'b0, yd};
     wire  [7:0]  cr_t = cr_s[8] ? -cr_s[7:0] : cr_s[7:0];
     wire  [7:0]  yk = two ? iy : (s1_k == 2'd2) ? yl[9:2] : (s1_k == 2'd1) ? ym[8:1] : yb;
-    wire  [7:0]  uk = two ? iu : (s1_k == 2'd2) ? ul[9:2] : (s1_k == 2'd1) ? um[8:1] : s1_cv ? uy[9:2] : hub;
-    wire  [7:0]  vk = two ? iv : (s1_k == 2'd2) ? vl[9:2] : (s1_k == 2'd1) ? vm[8:1] : s1_cv ? vy[9:2] : hvb;
+    wire  [7:0]  uk = two ? iu : (s1_k == 2'd2) ? ul[9:2] : (s1_k == 2'd1) ? um[8:1] : s1_cv ? uy[9:2] : s1_cf ? uf[10:3] : hub;
+    wire  [7:0]  vk = two ? iv : (s1_k == 2'd2) ? vl[9:2] : (s1_k == 2'd1) ? vm[8:1] : s1_cv ? vy[9:2] : s1_cf ? vf[10:3] : hvb;
     logic signed [9:0]  c2, d2, e2;
     logic signed [19:0] p_c, p_ecr, p_dcb, p_dg, p_eg;
     logic signed [19:0] rr, gg, bb;
@@ -629,7 +671,7 @@ module disp_reader #(
             s1_by <= '0; s1_bc <= '0; s1_k <= '0; s1_in <= 1'b0;
             s1_le <= '0; s1_lo <= '0; s1_lce <= '0; s1_lco <= '0; s1_f <= '0; s1_t0o <= 1'b0; s1_c0o <= 1'b0; s1_wk <= '0; s2_in <= 1'b0; s3_in <= 1'b0; de_d <= '0;
             s1_wf <= '0; s1_win <= 1'b0;
-            s1_fc <= '0; s1_cx <= 1'b0; s1_cv <= 1'b0; p_ua <= '0; p_va <= '0;
+            s1_fc <= '0; s1_cx <= 1'b0; s1_cv <= 1'b0; s1_cf <= 1'b0; s1_cfn <= 1'b0; p_ua <= '0; p_va <= '0;
             s1_cm <= 1'b0; acc_c <= '0; acc_r <= '0; cm_c <= '0; cm_r <= '0; cm_v <= 1'b0;
             c2 <= '0; d2 <= '0; e2 <= '0; p_c <= '0; p_ecr <= '0; p_dcb <= '0; p_dg <= '0; p_eg <= '0;
             r <= '0; g <= '0; b <= '0; de_out <= 1'b0;
@@ -639,7 +681,7 @@ module disp_reader #(
             s1_le <= t_e[2:1]; s1_lo <= t0[2:1]; s1_lce <= c_e[2:1]; s1_lco <= c0[2:1];
             s1_t0o <= t0[0]; s1_c0o <= c0[0]; s1_f <= hf_x; s1_wk <= cur_k;
             s1_wf <= cur_wf; s1_win <= fw_on;
-            s1_fc <= ch_h ? (ch_x ? 4'd8 : 4'd0) : hf_x; s1_cx <= ch_x; s1_cv <= ch_v;
+            s1_fc <= ch_h ? (ch_x ? 4'd8 : 4'd0) : hf_x; s1_cx <= ch_x; s1_cv <= ch_v; s1_cf <= ch_f; s1_cfn <= (v_pos[1] == v_pos[0]);
             p_ua <= ua; p_va <= va;              // (stage 2's row-a bytes: the next dot's left neighbour)
             s1_cm <= in_pic && !il && !fw_on && (x[2:0] == 3'd0);
             // fj#80: the comb sums (stage 2: the window's raw luma), latched at line 480
@@ -681,7 +723,8 @@ module disp_reader #(
     // in the burst loop missed 90 MHz by 1.7 ns).
     typedef enum logic [2:0] {F_IDLE, F_SETUP1, F_SETUP2, F_CMD, F_WAIT} fstate_t;
     fstate_t fs;
-    logic [1:0]  plane;                    // 0 Y, 1 Cb, 2 Cr
+    logic [2:0]  plane;                    // 0 Y, 1 Cb, 2 Cr; (S13) 3 / 4 the neighbour row's Cb / Cr
+    logic        f_nbp;                    // (S13) the set-up's second pass: the neighbour row
     logic [9:0]  f_line;
     logic [1:0]  f_slot;                   // its ring slot
     logic        f_more;                   // a second line follows (480i)
@@ -696,29 +739,38 @@ module disp_reader #(
     wire  [28:0] store_base = DPB_BASE + {7'd0, m_store, 17'd0};
     wire  [8:0]  left = f_words - f_word;
     // the line's chroma row: its own field's (see the header) or the frame's
-    wire  [8:0]  c_row = m_field ? {m_line_q[9:2], m_line_q[0]} : m_line_q[9:1];
+    wire  [8:0]  c_row_o = m_field ? {m_line_q[9:2], m_line_q[0]} : m_line_q[9:1];
+    // (S13) a field store's neighbour row: field line k = line >> 1, its row m = k >> 1; an even k
+    // takes row m - 1, an odd one m + 1, the field's first / last row itself (the last: 4 HF - 1)
+    wire  [7:0]  nb_m   = m_line_q[9:2];
+    wire  [9:0]  nb_lst = {m_hf, 2'b00} - 10'd1;
+    wire  [7:0]  nb_r   = !m_line_q[1] ? ((nb_m == 8'd0) ? nb_m : nb_m - 8'd1) :
+                          (({2'b00, nb_m} >= nb_lst) ? nb_m : nb_m + 8'd1);
+    wire  [8:0]  c_row  = f_nbp ? {nb_r, m_line_q[0]} : c_row_o;
+    wire  [28:0] rb_cb_w = store_base + {3'd0, pm_r, 5'd0} + lc_r;
 
     always_ff @(posedge mclk or negedge mrst_n) begin
         if (!mrst_n) begin
-            m_tog <= '0; m_line_q <= '0; m_line1_q <= '0; m_n_q <= 1'b0; m_first <= 1'b0; m_slot_q <= '0; m_store <= '0; m_w <= '0; m_hf <= '0; m_valid <= 1'b0; m_field <= 1'b0;
+            m_tog <= '0; m_line_q <= '0; m_line1_q <= '0; m_n_q <= 1'b0; m_nb_q <= 1'b0; f_nbp <= 1'b0; m_first <= 1'b0; m_slot_q <= '0; m_store <= '0; m_w <= '0; m_hf <= '0; m_valid <= 1'b0; m_field <= 1'b0;
             fc_seen <= 1'b0; fc_par <= 1'b0; fc_store <= '0; fetch_changes <= '0;
             fs <= F_IDLE; plane <= '0; f_line <= '0; f_slot <= '0; f_more <= 1'b0; f_sec <= 1'b0; f_word <= '0; f_got <= '0; f_words <= '0;
             pm_r <= '0; ly_r <= '0; lc_r <= '0; rb_cb <= '0; rb_cr <= '0; row_base <= '0;
             ddr_address <= '0; ddr_burstcount <= 8'd1; ddr_read <= 1'b0;
-            lb_we_y <= 1'b0; lb_we_cb <= 1'b0; lb_we_cr <= 1'b0; lb_waddr <= '0; lb_wdata <= '0;
+            lb_we_y <= 1'b0; lb_we_cb <= 1'b0; lb_we_cr <= 1'b0; lb_we_cbn <= 1'b0; lb_we_crn <= 1'b0; lb_waddr <= '0; lb_wdata <= '0;
         end else begin
             m_tog <= {m_tog[1:0], req_tog};
-            lb_we_y <= 1'b0; lb_we_cb <= 1'b0; lb_we_cr <= 1'b0;
+            lb_we_y <= 1'b0; lb_we_cb <= 1'b0; lb_we_cr <= 1'b0; lb_we_cbn <= 1'b0; lb_we_crn <= 1'b0;
             // the words returning: into the plane's ring slot (line & 3)
             if (ddr_readdatavalid) begin
                 lb_wdata <= ddr_readdata;
-                lb_waddr <= (plane == 2'd0) ? {f_slot, f_got[6:0]} : {1'b0, f_slot, f_got[5:0]};
-                lb_we_y <= (plane == 2'd0); lb_we_cb <= (plane == 2'd1); lb_we_cr <= (plane == 2'd2);
+                lb_waddr <= (plane == 3'd0) ? {f_slot, f_got[6:0]} : {1'b0, f_slot, f_got[5:0]};
+                lb_we_y <= (plane == 3'd0); lb_we_cb <= (plane == 3'd1); lb_we_cr <= (plane == 3'd2);
+                lb_we_cbn <= (plane == 3'd3); lb_we_crn <= (plane == 3'd4);
                 f_got <= f_got + 1'b1;
             end
             // a request crossed: capture it and the picture (stable, see above)
             if (m_tog[2] != m_tog[1]) begin
-                m_line_q <= req_line; m_line1_q <= req_line1; m_n_q <= req_n; m_slot_q <= req_slot; m_first <= req_first;
+                m_line_q <= req_line; m_line1_q <= req_line1; m_n_q <= req_n; m_nb_q <= req_nb; m_slot_q <= req_slot; m_first <= req_first;
                 m_store <= req_alt ? pic_pstore : pic_store; m_w <= pic_w_mbs; m_hf <= pic_hf_mbs; m_valid <= pic_valid;
                 m_field <= pic_field;
                 if (req_first && pic_valid) begin
@@ -727,10 +779,10 @@ module disp_reader #(
                 end
             end
             case (fs)
-                F_IDLE: if (m_tog[2] != m_tog[1]) begin fs <= F_SETUP1; f_sec <= 1'b0; end
+                F_IDLE: if (m_tog[2] != m_tog[1]) begin fs <= F_SETUP1; f_sec <= 1'b0; f_nbp <= 1'b0; end
                 F_SETUP1: begin
                     // (the request's fields were captured with the toggle, a cycle ago)
-                    if (!f_sec) begin f_slot <= m_slot_q; f_more <= m_n_q; end
+                    if (!f_sec && !f_nbp) begin f_slot <= m_slot_q; f_more <= m_n_q; end
                     if (m_valid && m_line_q < {m_hf, 4'd0}) begin
                         f_line <= m_line_q;
                         pm_r <= {13'd0, m_w} * {13'd0, m_hf};
@@ -740,10 +792,11 @@ module disp_reader #(
                     end else fs <= F_IDLE;
                 end
                 F_SETUP2: begin
-                    row_base <= store_base + ly_r;
-                    rb_cb <= store_base + {3'd0, pm_r, 5'd0} + lc_r;
+                    // (S13) the neighbour pass skips luma: its Cb row first
+                    row_base <= f_nbp ? rb_cb_w : store_base + ly_r;
+                    rb_cb <= rb_cb_w;
                     rb_cr <= store_base + {3'd0, pm_r, 5'd0} + {5'd0, pm_r, 3'd0} + lc_r;
-                    plane <= 2'd0; f_word <= '0; f_got <= '0; f_words <= {m_w, 1'b0};
+                    plane <= f_nbp ? 3'd3 : 3'd0; f_word <= '0; f_got <= '0; f_words <= f_nbp ? {1'b0, m_w} : {m_w, 1'b0};
                     fs <= F_CMD;
                 end
                 F_CMD: begin
@@ -762,14 +815,18 @@ module disp_reader #(
                 end
                 F_WAIT: begin
                     if (f_got == f_words) begin
-                        if (plane == 2'd2) begin
+                        if (plane == 3'd2 && m_nb_q && !f_nbp) begin
+                            // (S13) the line's field neighbour row: the set-up again, its row
+                            f_nbp <= 1'b1; fs <= F_SETUP1;
+                        end else if (plane == 3'd2 || plane == 3'd4) begin
                             // the request's second line (480i): the same set-up, the next slot
+                            f_nbp <= 1'b0;
                             if (f_more) begin
                                 f_more <= 1'b0; f_sec <= 1'b1; f_slot <= f_slot + 2'd1; m_line_q <= m_line1_q; fs <= F_SETUP1;
                             end else fs <= F_IDLE;
                         end
                         else begin
-                            row_base <= (plane == 2'd0) ? rb_cb : rb_cr;
+                            row_base <= (plane == 3'd0) ? rb_cb : rb_cr;
                             plane <= plane + 1'b1; f_word <= '0; f_got <= '0; f_words <= {1'b0, m_w};
                             fs <= F_CMD;
                         end

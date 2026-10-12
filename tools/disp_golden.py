@@ -19,8 +19,14 @@ integer conversion umd/disp_reader.sv states, of each dot's Y / Cb / Cr:
           (2 (y >> 2) + (y & 1)): ffmpeg's `separatefields` splits the woven picture into
           its two fields (every plane, chroma included, line-interleaved -- the layout the
           reconstruction writes and ffmpeg decodes to), each field's chroma is expanded with
-          its own planes -- horizontally interpolated as the frame's, rows nearest (a field
-          store's rows above and below are the other field's) -- and the two are woven back.
+          its own planes -- horizontally interpolated as the frame's, then vertically WITHIN
+          the field at H.264's field siting (Figure E-1: a field's chroma row m a quarter (top
+          field) / three quarters (bottom) of the way from its field line 2m to 2m + 1; the line
+          nearer its row (7 c[m] + c[n] + 4) >> 3, the other (5 c[m] + 3 c[n] + 4) >> 3, n the
+          row on its far side, the field's edges replicated; docs/display.md S13) -- checked
+          against ffmpeg's interlaced upsampling (scale=interl=1) within one code -- and the two
+          are woven back: Weave and the film weave at 480p. field_il, Blend and Bob: the rows
+          nearest within the field (horizontally interpolated), as their kernels see them.
   Crop (480i) and the video window keep chroma NEAREST before their own taps (`up`).
   blend   the field pair's 4:4:4 lines through ffmpeg's `interlace` lowpass (vf_tinterlace:
           (1 + a + 2b + d) >> 2 on every line, per plane), the Blend kernel's definition. The
@@ -184,14 +190,36 @@ def fields(Y, Cb, Cr):
     return res
 
 
+def up_fv(c, p):
+    """(docs/display.md S13) one field's chroma (field p: 0 top, 1 bottom) at H.264's field siting:
+    horizontal as hup, then field line k takes row m = k >> 1 and its far-side neighbour (k even:
+    m - 1, odd: m + 1; the field's first / last row itself); the line nearer its row (k & 1 == p)
+    (7 h[m] + h[n] + 4) >> 3, the other (5 h[m] + 3 h[n] + 4) >> 3"""
+    h = hup(c)
+    R = c.shape[0]
+    rows = []
+    for k in range(2 * R):
+        m = k >> 1
+        n = max(m - 1, 0) if (k & 1) == 0 else min(m + 1, R - 1)
+        if (k & 1) == p:
+            rows.append((7 * h[m] + h[n] + 4) >> 3)
+        else:
+            rows.append((5 * h[m] + 3 * h[n] + 4) >> 3)
+    return np.stack(rows)
+
+
 def woven444(Y, Cb, Cr, cup=None):
     """Every luma line with its own field's chroma, woven (H x W, three planes); `cup` each field's
-    chroma expansion (up_h, interpolated horizontally; up, nearest, for Crop and the window)."""
+    chroma expansion (up_h, interpolated horizontally; up, nearest, for Crop and the window; up_fv,
+    the field's vertical step too, which takes the field's parity)."""
     cup = up_h if cup is None else cup
     H, W = Y.shape
     planes = [np.zeros((H, W), np.int64) for _ in range(3)]
     for p, (yp, cb, cr) in enumerate(fields(Y, Cb, Cr)):
-        planes[0][p::2], planes[1][p::2], planes[2][p::2] = yp, cup(cb), cup(cr)
+        if cup is up_fv:
+            planes[0][p::2], planes[1][p::2], planes[2][p::2] = yp, up_fv(cb, p), up_fv(cr, p)
+        else:
+            planes[0][p::2], planes[1][p::2], planes[2][p::2] = yp, cup(cb), cup(cr)
     return planes
 
 
@@ -341,9 +369,48 @@ def check_chroma_oracle(c):
 
 
 check_chroma_oracle(L[1])
-Lf = woven444(*L)
+
+
+def check_field_oracle(c):
+    """(docs/display.md S13) the independent check of the field rule: ffmpeg's interlaced 4:2:0 ->
+    4:4:4 (scale=interl=1, in_chroma_loc=left: libswscale's format.c halves the vertical position
+    for a field and shifts the bottom field by a luma row -- 64 / 192 of 256, a quarter / three
+    quarters, Figure E-1's positions) against up_fv woven, within one code (ffmpeg rounds once), and
+    NOT within one code of the field-centred rule (3/4 + 1/4) nor of the rows nearest: an oracle
+    that cannot tell them apart checks nothing"""
+    if not HAVE_FFMPEG:
+        print("disp_golden: field chroma NOT checked (no ffmpeg)")
+        return
+    h, w = c.shape                                # c: the frame's chroma plane, rows line-interleaved by field
+    Yp = np.full((2 * h, 2 * w), 128)
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = os.path.join(d, "in.yuv"), os.path.join(d, "out.yuv")
+        with open(src, "wb") as f:
+            f.write(b"".join(p.astype(np.uint8).tobytes() for p in (Yp, c, c)))
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", "%dx%d" % (2 * w, 2 * h),
+                        "-i", src, "-vf", "scale=interl=1:in_chroma_loc=left:flags=bilinear+full_chroma_int+accurate_rnd",
+                        "-f", "rawvideo", "-pix_fmt", "yuv444p", dst], check=True)
+        raw = np.frombuffer(open(dst, "rb").read(), np.uint8).astype(np.int64)
+    n = 4 * h * w
+    assert raw.size == 3 * n, "ffmpeg's interlaced upsample: %d bytes" % raw.size
+    ref = raw[n:2 * n].reshape(2 * h, 2 * w)
+    ours = np.zeros_like(ref); cent = np.zeros_like(ref); near = np.zeros_like(ref)
+    for p in (0, 1):
+        ours[p::2], cent[p::2], near[p::2] = up_fv(c[p::2], p), up_ident(c[p::2]), up_h(c[p::2])
+    s_ = np.s_[4:-4, 1:-2]                        # (ffmpeg's own edge rule at the borders)
+    dd = np.abs(ours - ref)[s_]
+    assert dd.max() <= 1, "field chroma %d codes from ffmpeg's interlaced upsampling" % dd.max()
+    assert np.abs(cent - ref)[s_].max() > 1, "ffmpeg's interlaced upsampling is field-centred: no oracle"
+    assert np.abs(near - ref)[s_].max() > 1, "ffmpeg's interlaced upsampling is nearest: no oracle"
+    print("disp_golden: field chroma within %d code of ffmpeg's interlaced upsampling (interl=1)" % dd.max())
+
+
+check_field_oracle(L[1])
+Lf = woven444(*L)                                 # (the rows nearest within the field: Blend, Bob, 480i)
+Lfv = woven444(*L, cup=up_fv)                     # (S13: Weave and the film weave at 480p)
 Lf_n = woven444(*L, cup=up)                       # (nearest: Crop's and the window's rows)
-write_want("disp_want_field.hex", rgb(*Lf))
+write_want("disp_want_field.hex", rgb(*Lfv))
+write_want("disp_want_field_il.hex", rgb(*Lf))   # 480i: no field step
 write_want("disp_want_blend.hex", rgb(*blend(Lf)))
 write_want("disp_want_bob0.hex", rgb(*bob(Lf, 0)))
 write_want("disp_want_bob1.hex", rgb(*bob(Lf, 1)))
@@ -351,6 +418,7 @@ write_want("disp_want_bob1.hex", rgb(*bob(Lf, 1)))
 S = picture(11, 480, 272)
 write_store("disp_store_s.hex", *S)
 Sf = woven444(*S)
+write_want("disp_want_s_field.hex", rgb(*woven444(*S, cup=up_fv)))   # (S13: the field's last row inside the raster)
 write_want("disp_want_s_blend.hex", rgb(*blend(Sf)))
 write_want("disp_want_s_bob0.hex", rgb(*bob(Sf, 0)))
 write_want("disp_want_s_bob1.hex", rgb(*bob(Sf, 1)))
@@ -478,7 +546,7 @@ def cm_args(name, Y):
 cm_args("disp_cm_field.args", L[0])
 for keep in (0, 1):
     mp = matched(keep)
-    write_want("disp_want_match%d.hex" % keep, rgb(*woven444(*mp)))
+    write_want("disp_want_match%d.hex" % keep, rgb(*woven444(*mp, cup=up_fv)))
     cm_args("disp_cm_match%d.args" % keep, mp[0])
 
 oracle = "ffmpeg separatefields + interlace lowpass" if HAVE_FFMPEG else \
