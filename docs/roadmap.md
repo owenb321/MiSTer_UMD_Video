@@ -48,7 +48,7 @@
 
 ## Where the work stands (2026-10-11) -- start here in a new session
 
-- **Going public on GitHub (decided 2026-10-11, the maintainer): step 1 of 4 ✅, step 2 ✅, step 3 next** (`CLAUDE.md` "Source
+- **Going public on GitHub (decided 2026-10-11, the maintainer): steps 1-3 ✅, step 4 (the first release) next** (`CLAUDE.md` "Source
   control"). A fresh history, as MiSTer_DVD and MiSTer_h264_decoder did: every Forgejo commit carries a
   personal e-mail address, so none is pushed; the tree's files were audited clean (no paths, hosts or
   addresses in any version of any file).
@@ -58,7 +58,7 @@
      UMD Main, the release and field-report skills on `gh`, the manual's bug-report link.
   2. ✅ The maintainer (2026-10-11): the private, empty GitHub repository; account e-mail privacy on (and "block pushes that
      expose my email").
-  3. The import: one commit of Forgejo `main`'s tree under `owenb321@users.noreply.github.com` (this
+  3. ✅ (2026-10-11, `ea7659e`) The import: one commit of Forgejo `main`'s tree under `owenb321@users.noreply.github.com` (this
      repository's `user.email`), pushed as GitHub `main`; `origin` -> GitHub, Forgejo kept as `forgejo`.
   4. The first release (the `release` skill): the one release commit, the timing-clean `.rbf` and the UMD
      Main from it, `publish_draft.sh`, CI's zip, the smoke test; public with it.

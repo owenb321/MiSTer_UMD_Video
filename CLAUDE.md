@@ -664,8 +664,10 @@ issues to fj#89) and is not imported. Write everything as if it were public alre
 repository starts from one import commit, as MiSTer_DVD's and MiSTer_h264_decoder's did; the
 Forgejo history is not pushed (its commits carry a personal e-mail address). **This repository's
 `user.email` is the GitHub noreply address (`owenb321@users.noreply.github.com`)**: never commit
-with another, and never push a Forgejo-era commit, branch or tag to GitHub. Until the import
-lands, `origin` is still Forgejo and new references are written `fj#NN`.
+with another, and never push a Forgejo-era commit, branch or tag to GitHub. **The import is made
+(2026-10-11):** GitHub's first commit is `ea7659e` (Forgejo `main` `ceb0ec2`'s tree); `origin` is
+GitHub, Forgejo the `forgejo` remote (the bring-up history, read only). Local backup branches
+carry Forgejo history: never push them.
 
 ### ⚠ Historical `fj#NN` references — do not "fix" them
 
