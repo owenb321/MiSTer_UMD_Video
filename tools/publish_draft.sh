@@ -127,7 +127,11 @@ echo "== creating DRAFT $TAG"
 echo "   title : $TITLE"
 echo "   core  : $BASE"
 echo "   main  : $MAIN"
-gh release create "$TAG" --draft --title "$TITLE" --notes-file "$NOTES" "$RBF" "$MAN" "$MAIN" "$MAIN.json"
+# --target: the build's own commit (the manifest's). Without it GitHub creates the tag at the default
+# branch's head WHEN THE DRAFT IS PUBLISHED -- past the release commit once the ledger / history
+# commits land -- and docs.yml deploys the manual from that tag (v0.1.0's draft, 2026-10-13).
+SHA="$(jq -r '.git.sha' "$MAN")"
+gh release create "$TAG" --draft --target "$SHA" --title "$TITLE" --notes-file "$NOTES" "$RBF" "$MAN" "$MAIN" "$MAIN.json"
 
 if [ "$DISPATCH" -eq 1 ]; then
     echo "== dispatching package.yml"

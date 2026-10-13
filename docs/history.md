@@ -39,3 +39,13 @@ announcement bar, home, install and compatibility pages and the README say v0.1.
 yet"; README's opening qualified (the ARM only serves SD blocks on a stock Main). The bring-up history up to
 it is `docs/roadmap.md` and the Forgejo era's PRs `fj#1`-`fj#93`.
 
+*The draft's zip found one defect:* `UMD_INSTALL.txt` (written by `tools/package_release.sh` at the
+manifest's commit) still said the `MiSTer.ini` lines were "For SUBTITLES" -- A7's world, not A12's.
+Fixed in `2dfb9e1`; the core and the UMD Main rebuilt there came out **bit-identical** to the smoke-tested
+pair (the netlist and `BUILD_DATE` unchanged), so `2dfb9e1` is the release commit and the draft targets
+it (`gh release edit --target`; `publish_draft.sh` sets it from the manifest since). Smoke test on .201
+(stock Main: Akira plays, Subtitle shows "1 English" and the lines, Control Panel's "needs the UMD Main";
+the UMD Main: the menus start the film, sound 466 -> 700 frames played with 0 errors, the panel, Stop's
+disc screen); the OSD's About line itself was not looked at (a screenshot is upstream of the OSD): the
+deployed file's sha256 was checked against the manifest instead.
+

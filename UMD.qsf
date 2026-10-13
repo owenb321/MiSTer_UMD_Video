@@ -423,6 +423,9 @@
 #     PASS clk_dec 89.17/88.18, clk_mem 95.72/95.11, gates PASS (lint, canary, fmax at both corners). ALM 41,109
 #     (98 %), registers 51,672, RAM 507, DSP 92. releases/UMD_20261013.rbf (sha256 in its .json); the UMD Main
 #     MiSTer_UMD from the same commit (Main_MiSTer 7317947, host_proto 1).
+#     REBUILT at 2dfb9e1 (the install text's fix, tools/package_release.sh: no netlist change, the same
+#     BUILD_DATE): the .rbf bit-identical (sha256 6c218b09..., the smoke-tested file), the UMD Main too
+#     (3a5af4c4...). 2dfb9e1 is the shipped release commit; the draft targets it.
 
 set_global_assignment -name TOP_LEVEL_ENTITY sys_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0
