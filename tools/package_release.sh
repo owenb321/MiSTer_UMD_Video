@@ -86,15 +86,18 @@ MiSTer UMD Video player core -- $VER
      MiSTer_UMD.json             - which build it is
      umd_report.py               - makes a bug-report bundle (step 5)
 
-2. For SUBTITLES, add these two lines to /media/fat/MiSTer.ini (add the section; do NOT
-   replace the file -- and if there is no MiSTer.ini, create one with just these lines):
+2. For the UMD Main's features -- the discs' own menus, the control panel, a stopped disc's
+   art, remembering where each disc stopped, a real UMD from a PSP -- add these two lines to
+   /media/fat/MiSTer.ini (add the section; do NOT replace the file -- and if there is no
+   MiSTer.ini, create one with just these lines):
 
      [UMD]
      main=MiSTer_UMD
 
    MiSTer then runs the UMD Main while the UMD core is loaded, and your usual Main for
-   every other core. Without the lines everything else plays the same; the Subtitle
-   button says "Subtitles need the UMD Main.".
+   every other core. Without the lines the core still plays every disc the same way --
+   picture, sound, subtitles, chapters and the rest -- going straight to the film instead
+   of the disc's menus; the Control Panel button says "The control panel needs the UMD Main.".
 
 3. Put UMD Video .iso images anywhere the file picker can reach (games/UMD/ is the
    convention), launch UMD, and pick an image from Load Video.
@@ -111,7 +114,7 @@ MiSTer UMD Video player core -- $VER
    or on a PC with Python 3: python3 umd_report.py <image>.iso
 
 Updating: extract the new zip over the old files; the core and the UMD Main must come
-from the same release (a mismatched pair says "Update the UMD Main for subtitles.").
+from the same release (a mismatched pair says "Update the UMD Main for the control panel.").
 Removing the UMD Main: delete the two MiSTer.ini lines and MiSTer_UMD.
 
 Source: the UMD Main is the MiSTer project's Main_MiSTer (GPL-3.0-or-later) at commit
