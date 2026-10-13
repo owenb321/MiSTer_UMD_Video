@@ -4,13 +4,13 @@ A player for **PSP UMD Video** discs on the MiSTer FPGA platform (DE10-Nano). Pu
 Video `.iso` on the SD card and the core decodes its H.264 video and ATRAC3plus audio in
 FPGA fabric.
 
-!!! info "Status: in development, no release yet"
-    The development build plays UMD Video discs from start to end. Picture, sound and
+!!! info "Status: v0.1.0, the first release"
+    The core plays UMD Video discs from start to end. Picture, sound and
     subtitles work; so do the transport (pause, stop, chapters, fast forward and rewind,
     Go To, A-B Repeat), the audio and subtitle tracks, 480p over HDMI and native 480i to a
     CRT. With the **UMD Main** that ships with the core, the discs' own menus run as on a
     PSP, along with the control panel, the disc screen and remembering where each disc
-    stopped. There is no release to download yet: see [Install](getting-started/install.md).
+    stopped. Download it from the latest release: see [Install](getting-started/install.md).
     What is not supported is listed in [Compatibility](reference/compatibility.md).
 
 ## Start here

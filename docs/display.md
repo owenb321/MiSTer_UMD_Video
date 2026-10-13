@@ -956,7 +956,7 @@ a frame's rows stay nearest too (the walker's ring is by field line, row s - 1 i
 and the menu window keep nearest chroma under their own taps. A declared siting other than type 0
 is not honoured (none in the library).
 
-## 13. A field store's vertical chroma step (`feature/chroma-field`, 2026-10-12) -- ✅ HW-CONFIRMED (.201)
+## 13. A field store's vertical chroma step (`feature/chroma-field`, 2026-10-12) -- ✅ MERGED (PR #3), ✅ HW-CONFIRMED (.201)
 
 **Why.** §12 left a field store's chroma nearest vertically: its rows a / d are the other field's. Each
 field's chroma row covers two of that field's lines, so in the woven picture a colour edge steps every

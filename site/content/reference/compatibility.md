@@ -1,6 +1,6 @@
 # Compatibility
 
-Current as of **the unreleased development build**.
+Current as of **v0.1.0**.
 
 ## Formats
 

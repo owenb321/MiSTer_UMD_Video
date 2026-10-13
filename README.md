@@ -3,11 +3,11 @@
 A **PSP UMD Video player core for the MiSTer FPGA platform** (DE10-Nano / Intel Cyclone V).
 
 Put a `.iso` image of a UMD Video disc on the SD card and the core plays it: the H.264
-video and ATRAC3plus audio are decoded **entirely in FPGA fabric**, with no HPS-side
-daemon. The ARM only serves SD blocks through the standard framework interface, exactly
-like any other core.
+video and ATRAC3plus audio are decoded **entirely in FPGA fabric**. On a stock Main the ARM
+only serves SD blocks through the standard framework interface, exactly like any other core;
+the optional **UMD Main** (below) adds the features that run on the ARM.
 
-> **Status: plays discs end to end (development, no release yet).** On a stock Main the
+> **Status: v0.1.0, the first release: plays discs end to end.** On a stock Main the
 > core plays a UMD Video image from start to end: H.264 decoded faster than real time on every
 > disc tested and shown at its authored cadence, ATRAC3plus sound in step, subtitles, the audio
 > and subtitle tracks, pause / stop / chapters / fast forward and rewind / Go To / A-B Repeat,
@@ -53,10 +53,11 @@ Out of scope for the first version: PSP game cutscenes.
 
 ## Getting started
 
-There is no release yet. To try it, build the core and the UMD Main (below), package them
-with `./tools/package_release.sh`, and follow the
+Download `MiSTer_UMD_Video_<version>.zip` from the
+[latest release](https://github.com/owenb321/MiSTer_UMD_Video/releases/latest) and follow the
 [install page](site/content/getting-started/install.md): the zip goes to the SD card's root,
-and two lines in `MiSTer.ini` turn on the UMD Main (the disc menus and the rest).
+and two lines in `MiSTer.ini` turn on the UMD Main (the disc menus and the rest). To build it
+yourself, see below and `./tools/package_release.sh`.
 
 ## Documentation
 

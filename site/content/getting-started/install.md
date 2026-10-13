@@ -1,10 +1,5 @@
 # Install the core
 
-!!! info "Not yet released"
-    There is no release yet. These steps describe how installation will work; until a
-    release exists, build the core from source (see
-    [Building from source](../about/building.md)).
-
 1. Download `MiSTer_UMD_Video_<version>.zip` from the latest release and extract it to the
    **root** of your SD card (`/media/fat`). It places:
     - `_Other/UMD_YYYYMMDD.rbf`: the core;
