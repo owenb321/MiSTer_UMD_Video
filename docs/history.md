@@ -27,3 +27,15 @@ Quartus and verilator (`lint_undriven`) are the checks for it. Two bench arms we
 before the RTL was: a whole-frame motion diff cannot see one frozen wave of three, and the
 gradient test was confounded by the waves' own top/bottom asymmetry until the waves were
 forced flat for that arm (`docs/idle_screen.md`).
+
+## 2. The first release, v0.1.0 (2026-10-13)
+
+**What shipped:** the release commit `9cfd145` on `main` (after GitHub PRs #1-#3: the move recorded,
+chroma interpolated, a field store's vertical chroma step), `CORE_VERSION` `v0.1.0`; the core
+`releases/UMD_20261013.rbf` from `build_release.sh --release` at the pinned SEED 5 (clk_dec 89.17 MHz @100 °C /
+88.18 @−40 °C, 41,109 ALM, 98 %, RAM 507, DSP 92; every gate PASS) and the UMD Main `MiSTer_UMD` from the same
+commit (Main_MiSTer `7317947`, host protocol 1), packed into one zip by CI (`package.yml`). The manual's
+announcement bar, home, install and compatibility pages and the README say v0.1.0 instead of "no release
+yet"; README's opening qualified (the ARM only serves SD blocks on a stock Main). The bring-up history up to
+it is `docs/roadmap.md` and the Forgejo era's PRs `fj#1`-`fj#93`.
+
