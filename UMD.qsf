@@ -413,6 +413,11 @@
 #     (98 %, the packing estimate) -- combinational ALUTs 62,339 -> 62,298 (-41: Crop's DR_HB reused), registers
 #     51,712. RAM 503, DSP 92 (unchanged). UMD_chroma_20261012_0529.rbf, clean tree. clk_dec's 1.31 MHz margin
 #     at 100 C is under A2's 1.5 but the fit passes: no sweep (the maintainer's rule).
+#   2026-10-12 (feature/chroma-field, 8b747e8, dev-chromafld: a field store's vertical chroma step at Figure E-1's
+#     field siting -- the neighbour row fetched with the line, four neighbour RAMs; docs/display.md S13): at the
+#     pinned SEED 5 PASS clk_dec 87.87/88.89, clk_mem 96.66/97.36, no negative slack on a core clock (pll_hdmi only). ALM 41,130 (98 %,
+#     the packing estimate) -- combinational ALUTs 62,298 -> 62,722 (+424), registers 51,592. RAM 503 -> 507 (+4,
+#     as planned), DSP 92. UMD_chromafld_20261012_1940.rbf, clean tree. No sweep (the fit passes).
 
 set_global_assignment -name TOP_LEVEL_ENTITY sys_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.0

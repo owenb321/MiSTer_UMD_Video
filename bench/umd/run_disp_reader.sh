@@ -13,8 +13,9 @@
 # {de, R, G, B} against tools/disp_golden.py, LAT 4: [rgb] a frame (the BT.601 conversion
 # of the store's samples, chroma interpolated both ways -- docs/display.md S12); [field] the
 # same store as a field pair, woven (ffmpeg separatefields: each line's chroma from its own
-# field, interpolated along the line); [il] the 480i frame arms want disp_want_frame_il (rows
-# nearest); [pass] the frame in Bob and in
+# field, interpolated along the line, then -- Weave and the film weave at 480p -- vertically within
+# the field at H.264's field siting, S13; [il] the 480i arms want disp_want_frame_il / field_il (rows
+# nearest); [field] small: a 480x272 pair, the field's last chroma row inside the raster; [pass] the frame in Bob and in
 # Blend (untouched); [blend] the pair in Blend (ffmpeg's interlace lowpass) at 720x480,
 # 480x272 (the bottom mirror inside the raster) and 720x576 (clipped: line 479's d is the
 # real line 480); [bob] the pair in Bob keeping either field, at 720x480 and 480x272 (the
@@ -114,6 +115,18 @@
 #   Z10 Crop interpolated too (its own taps)                          -> [crop]
 #   Z11 the window interpolated too (its own taps)                    -> [win] (the upscale: the half
 #       window's weight is 8 on every column, its chroma pairs equal -- it cannot see this)
+#   a field store's vertical step (docs/display.md S13; the golden's up_fv, checked against ffmpeg's
+#   interlaced upsampling, scale=interl=1):
+#   V1  the neighbour's direction swapped (an even field line takes m + 1) -> [field]
+#   V2  the field step under Bob (its kept lines)                     -> [bob]
+#   V3  no bottom replicate (the field's last row's m + 1 fetched)    -> [field] (480x272)
+#   V4  no top replicate (row -1 fetched)                             -> [field]
+#   V5  the neighbour from the OTHER field                            -> [field]
+#   V6  the weights' sides swapped (7/8 on the farther line)          -> [field]
+#   V7  the field step's rounding (+4) dropped                        -> [field]
+#   V8  the neighbour row never fetched                               -> [field]
+#   (the step's kernel test is redundant on Blend / Bob's rebuilt lines -- the kernels win the
+#   chroma choice first -- so no arm can see it: V2 covers the bob's kept lines)
 #   C1  se_cdc: a pop while a word is in flight (the guard dropped)  -> [order]
 #   C2  se_cdc: pop only into an empty register (no pop on take)     -> [rate]
 set -u
@@ -162,7 +175,8 @@ DISP_ARMS=(
   "disp_match1|+arm=match +field +match +parity=1 +mode=2 +film=1 +want=$G/disp_want_match1.hex $(cat $G/disp_cm_match1.args)"
   "disp_film_blend|+arm=film +field +mode=2 +film=1 +want=$G/disp_want_field.hex"
   "disp_film_bob|+arm=film +field +mode=0 +film=2 +parity=1 +want=$G/disp_want_bob1.hex"
-  "disp_match_il|+arm=match +il +field +match +parity=0 +want=$G/disp_want_field.hex"
+  "disp_match_il|+arm=match +il +field +match +parity=0 +want=$G/disp_want_field_il.hex"
+  "disp_field_s|+arm=field +small +field +want=$G/disp_want_s_field.hex"
   "disp_pass_bob|+arm=pass +mode=1"
   "disp_pass_blend|+arm=pass +mode=2 +parity=1"
   "disp_blend|+arm=blend +field +mode=2 +want=$G/disp_want_blend.hex"
@@ -175,7 +189,7 @@ DISP_ARMS=(
   "disp_single_w|+arm=single +field +single +mode=0 +parity=1 +want=$G/disp_want_bob1.hex"
   "disp_single_l|+arm=single +small +field +single +mode=2 +parity=0 +want=$G/disp_want_s_bob0.hex"
   "disp_il|+arm=il +il +want=$G/disp_want_frame_il.hex"
-  "disp_il_field|+arm=il +il +field +mode=2 +want=$G/disp_want_field.hex"
+  "disp_il_field|+arm=il +il +field +mode=2 +want=$G/disp_want_field_il.hex"
   "disp_il_still_frame|+arm=il +il +still +mode=1 +want=$G/disp_want_frame_il.hex"
   "disp_il_single0|+arm=ilsingle +il +field +single +parity=0 +want=$G/disp_want_bob0.hex"
   "disp_il_single1|+arm=ilsingle +il +field +single +parity=1 +want=$G/disp_want_bob1.hex"
@@ -297,7 +311,7 @@ PYEOF
   mut M2 $D "m_store <= req_alt ? pic_pstore : pic_store;" "m_store <= pic_store;" $DT "match" "umd/sync_gen.sv $MODEL" "$MA1" &
   mut M3 $D "        end else if (h_pos == 12'd1440 && (ini || v_pos == 12'd523 || v_pos == 12'd524 || fl < 11'd240)) begin
             req_alt <= 1'b0;" "        end else if (h_pos == 12'd1440 && (ini || v_pos == 12'd523 || v_pos == 12'd524 || fl < 11'd240)) begin
-            req_alt <= pic_match;" $DT "match" "umd/sync_gen.sv $MODEL" "+arm=match +il +field +match +parity=0 +want=$G/disp_want_field.hex" &
+            req_alt <= pic_match;" $DT "match" "umd/sync_gen.sv $MODEL" "+arm=match +il +field +match +parity=0 +want=$G/disp_want_field_il.hex" &
   mut M4 $D "wire         film_w = (pic_film == 2'd1);" "wire         film_w = 1'b0;" $DT "film" "umd/sync_gen.sv $MODEL" "+arm=film +field +mode=2 +film=1 +want=$G/disp_want_field.hex" &
   mut M5 $D "(pic_single || pic_film == 2'd2 ||" "(pic_single ||" $DT "film" "umd/sync_gen.sv $MODEL" "+arm=film +field +mode=0 +film=2 +parity=1 +want=$G/disp_want_bob1.hex" &
   wait
@@ -336,6 +350,18 @@ PYEOF
   mut Z9 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !fw_on && !crop && !il;" $DT "il" "umd/sync_gen.sv $MODEL" "+arm=il +il +want=$G/disp_want_frame_il.hex" &
   mut Z10 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !fw_on;" $DT "crop" "umd/sync_gen.sv $MODEL" "$CRA" &
   mut Z11 $D "wire         ch_h = !fw_on && !crop;" "wire         ch_h = !crop;" $DT "win" "umd/sync_gen.sv $MODEL" "$(wa up +small)" &
+  wait
+  # a field store's vertical step (docs/display.md S13)
+  FS="+arm=field +small +field +want=$G/disp_want_s_field.hex"
+  mut V1 $D "wire  [7:0]  nb_r   = !m_line_q[1] ?" "wire  [7:0]  nb_r   = m_line_q[1] ?" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  mut V2 $D "pic_field && !bob && (kern == 2'd0);" "pic_field && (kern == 2'd0);" $DT "bob" "umd/sync_gen.sv $MODEL" "+arm=bob +field +mode=1 +parity=0 +want=$G/disp_want_bob0.hex" &
+  mut V3 $D "(({2'b00, nb_m} >= nb_lst) ? nb_m : nb_m + 8'd1)" "(nb_m + 8'd1)" $DT "field" "umd/sync_gen.sv $MODEL" "$FS" &
+  mut V4 $D "((nb_m == 8'd0) ? nb_m : nb_m - 8'd1)" "(nb_m - 8'd1)" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  mut V5 $D "wire  [8:0]  c_row  = f_nbp ? {nb_r, m_line_q[0]} : c_row_o;" "wire  [8:0]  c_row  = f_nbp ? {nb_r, !m_line_q[0]} : c_row_o;" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  wait
+  mut V6 $D "s1_cfn <= (v_pos[1] == v_pos[0]);" "s1_cfn <= (v_pos[1] != v_pos[0]);" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  mut V7 $D "wire  [10:0] uf = s1_cfn ? ({hub, 3'b000} - {3'd0, hub} + {3'd0, hun} + 11'd4)" "wire  [10:0] uf = s1_cfn ? ({hub, 3'b000} - {3'd0, hub} + {3'd0, hun} + 11'd0)" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
+  mut V8 $D "if (plane == 3'd2 && m_nb_q && !f_nbp) begin" "if (plane == 3'd2 && 1'b0 && !f_nbp) begin" $DT "field" "umd/sync_gen.sv $MODEL" "$FLD" &
   wait
   C=umd/se_cdc.sv; CT=bench/umd/se_cdc_tb.sv
   mut C1 $C "assign f_rd = !f_empty && !pend && (!out_valid || take);" "assign f_rd = !f_empty && (!out_valid || take);" $CT "order" "umd/fifo_dc.sv" &

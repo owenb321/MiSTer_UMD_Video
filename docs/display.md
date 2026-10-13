@@ -858,7 +858,7 @@ picture alone. A plain SEEK to the end (a chapter mark at or past OUT, a menu's 
 takes the skip and now shows the last picture.
 
 
-## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ HW-CONFIRMED (.201)
+## 12. Chroma interpolated (`feature/chroma-interp`, 2026-10-12; the H264 core's "chroma at the identity", ported) -- ✅ MERGED (PR #2), ✅ HW-CONFIRMED (.201)
 
 **Why.** The reader showed 4:2:0 chroma NEAREST: each chroma sample repeated over its 2 x 2 luma
 block. Beside saturated detail (red above all: the largest chroma excursion at a low luma, which
@@ -955,3 +955,73 @@ lines: within-field interpolation needs rows y +- 2, i.e. the H264 core's chroma
 a frame's rows stay nearest too (the walker's ring is by field line, row s - 1 is not kept). Crop
 and the menu window keep nearest chroma under their own taps. A declared siting other than type 0
 is not honoured (none in the library).
+
+## 13. A field store's vertical chroma step (`feature/chroma-field`, 2026-10-12) -- ✅ HW-CONFIRMED (.201)
+
+**Why.** §12 left a field store's chroma nearest vertically: its rows a / d are the other field's. Each
+field's chroma row covers two of that field's lines, so in the woven picture a colour edge steps every
+four frame lines, and the two fields step at different lines: along a horizontal colour edge the woven
+picture alternates field by field, a fine comb in the colour alone, even on a still film frame (measured
+on three Family Guy pictures from the rig, 2026-10-12: the step changes 15-22 % of the pixels, mean
+0.8-1.3 codes, up to 31-38 -- about the size of §12's horizontal fix, its peaks smaller). The maintainer
+asked for it after seeing the comparison crops ("start working on the vertical blend").
+
+**Where a field's chroma sits: H.264 Figure E-1, not the field's centre.** For `chroma_sample_loc_type`
+0 the top field's chroma row m lies between frame lines 4m and 4m + 1 (frame position 4m + 1/2) and the
+bottom field's between 4m + 2 and 4m + 3 (4m + 5/2): together the progressive positions, MPEG-2's
+interlaced 4:2:0 siting. In each field's own lines that is a QUARTER of the way from field line 2m to
+2m + 1 (top) and THREE QUARTERS (bottom), not the half the frame rule uses. So a field line takes its
+own row m and the row on its far side (an even field line 2m: row m - 1; an odd one: m + 1):
+
+| field line | top field (p 0) | bottom field (p 1) |
+|---|---|---|
+| 2m | 7/8 row m + 1/8 row m - 1 | 5/8 row m + 3/8 row m - 1 |
+| 2m + 1 | 5/8 row m + 3/8 row m + 1 | 7/8 row m + 1/8 row m + 1 |
+
+i.e. the line nearer its row (field line parity = field parity; frame line y: `y[1] == y[0]`)
+`(7 own + n + 4) >> 3`, the other `(5 own + 3 n + 4) >> 3`, after §12's horizontal step (two
+roundings); the field's first / last chroma row replicated (n = own). ffmpeg agrees: libswscale's
+`format.c` ("Fix vertical chroma position for interlaced frames") halves the vertical position for a
+field and shifts the bottom field by a luma row -- 64 / 192 of 256 -- and the golden is checked against
+its `scale=interl=1` within one code. **The H264 core's field rule (its `chroma.md` §2: "the field's
+siting" applied in the field's coordinates, i.e. centred, 3/4 + 1/4) is off by an eighth on every field
+line**: `harvest.md`, to port back.
+
+**Where it applies:** a field store at 480p shown as stored -- Weave, and the film weave / matched pair
+of fj#80 (each line's own store's field). Not under Bob (its kept lines included) or Blend, whose kernels
+keep §12's rows; not at 480i, not in the window, not under Crop. Frames keep §12's step.
+
+**How.** A field line's far-side row belongs to the field line two frame lines away -- a line the ring
+of four has already overwritten (y - 2) or is still fetching (y + 2). So the 480p fetch of a field
+store's line brings that row with it (`req_nb`): after the line's Y, Cb, Cr the set-up runs a second
+time with the neighbour row (`f_nbp`; the store row is the line's own +- 2, or the same at the field's
+edges: no second multiplier) and fetches its Cb / Cr as planes 3 / 4 into four neighbour RAMs beside
+the slot (even / odd halves at row b's addresses, so §12's horizontal step applies to them through the
+same `DR_HB`). The read-out selects `(7 b + n + 4) >> 3` / `(5 b + 3 n + 4) >> 3` (`s1_cf`, `s1_cfn`).
+Cost: +4 M10K; a field title's 480p line reads 2W words more on ram2 (90 of 180: the display's reads
++50 % on field titles only); LAT unchanged.
+
+**Verification.** `tools/disp_golden.py` `up_fv` (from the table above, not the RTL); `check_field_oracle`:
+ffmpeg's interlaced upsampling within one code, and asserted NOT within one code of the field-centred
+rule nor of the rows nearest. New wants: `disp_want_field` (Weave), `disp_want_s_field` (a 480x272 pair:
+the field's last row inside the raster), `disp_want_field_il` (480i), the matched pairs. `run_disp_reader.sh`
+GREEN; `--red` V1-V8 (the direction, Bob's kept lines, both replicates, the other field's row, the
+weights' sides, the rounding, the fetch dropped).
+
+**On the rig (.201, 2026-10-12, `UMD_chromafld_20261012_1940.rbf`; the same procedure as §12: Progressive /
+Weave, paused, the raw raster, `tools/chroma_shot_check.py` now scoring every rule the reader has had):**
+
+| shot | store | §13 field step | §12 along the line (the previous build) | nearest |
+|---|---|---|---|---|
+| Family Guy 64.0 s | field pair | **0** of 345,075 | 30,580 (max 43) | 58,508 (62) |
+| Family Guy 89.0 s | field pair | **0** | 63,531 (45) | 98,810 (63) |
+| Family Guy 114.0 s | field pair | **0** | 45,793 (41) | 69,772 (60) |
+| Akira 273.9 s (the control) | frame | §12 both ways: **0** | -- | 34,769 (32) |
+
+Pixels differing outside the pause glyph's box. The tool's control the other way: the previous build's shot
+(§12's table) matches §12's rule and differs from §13's on 46,161 pixels. Decode errors 0; ram2's longest
+BUSY run (`d2_busy_max`) 49 on Family Guy and on Akira alike -- the neighbour fetch shows no occupancy cost.
+
+**Known limitations.** Bob and Blend keep the rows nearest within the field (their kernels mix the
+fields' lines; giving each kernel line its own vertical step needs a neighbour per window line). 480i
+(the walker's ring) and the window keep §12's rules.

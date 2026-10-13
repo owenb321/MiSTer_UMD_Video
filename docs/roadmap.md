@@ -98,7 +98,7 @@
     16:9 titles unzoomed, errors 0.
   - ✅ The maintainer's own test on .236 passed (2026-10-09). ✅ MERGED (PR fj#83).
 
-- **Chroma interpolated, not nearest (2026-10-12): 🔧 built on `feature/chroma-interp`, ✅ HW-CONFIRMED (.201)**
+- **Chroma interpolated, not nearest (2026-10-12): ✅ MERGED (PR #2), ✅ HW-CONFIRMED (.201)**
   (`docs/display.md` §12, `CORE_VERSION` `dev-chroma`): the H264 core's "chroma at the identity" ported -- an odd
   column `(c[x >> 1] + c[(x + 1) >> 1] + 1) >> 1` at 480p and 480i Fit / Letterbox, a 480p frame store vertically
   `(3 h[m] + h[m -+ 1] + 2) >> 2`; field stores stay nearest vertically, Crop and the window unchanged. The siting
@@ -106,7 +106,16 @@
   (K9 / K10's dead anchors fixed); plane / overlay / zoom / scaffold green. Fit SEED 5 PASS 87.31 / 89.20, 40,926
   ALM (ALUTs -41), `UMD_chroma_20261012_0529.rbf`. ✅ On .201: six paused pictures (Akira's frames, Family Guy's
   field pairs) equal the golden on every pixel outside the pause glyph, nearest off by 50-110K pixels each
-  (`display.md` §12, `tools/chroma_shot_check.py`). **Next:** merge (on request); 480i on the CRT not looked at.
+  (`display.md` §12, `tools/chroma_shot_check.py`). 480i on the CRT not looked at.
+- **A field store's vertical chroma step (2026-10-12): 🔧 built on `feature/chroma-field`, ✅ HW-CONFIRMED (.201)**
+  (`docs/display.md` §13, `CORE_VERSION` `dev-chromafld`): Weave / the film weave at 480p blend each field's chroma
+  rows at H.264 Figure E-1's field siting (a quarter / three quarters down the field's line pair: 7/8 + 1/8, 5/8 +
+  3/8), the far-side row fetched with the line (four neighbour RAMs). Golden checked against ffmpeg's interlaced
+  upsampling (`scale=interl=1`); `run_disp_reader.sh` GREEN + `--red` V1-V8. Fit SEED 5 PASS 87.87 / 88.89, 41,130
+  ALM (ALUTs +424), RAM +4, `UMD_chromafld_20261012_1940.rbf`. Found on the way: the H264 core's field rule is
+  field-centred, an eighth off (`harvest.md`, to port back). ✅ On .201: three paused Family Guy pictures equal the
+  golden on every pixel outside the pause glyph (the previous rule off by 30-64K pixels each), Akira's frame unchanged,
+  `d2_busy_max` 49 on both. **Next:** merge (on request).
 - **Hard-telecined film, field matching (Forgejo fj#80, 2026-10-08/09): ✅ MERGED (PR fj#82), ✅ HW-CONFIRMED**
   (`docs/telecine.md`). 15 main titles are film coded as 59.94
   field pairs with the 3:2 baked in; Weave combs 2 pairs in 5 there.

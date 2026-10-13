@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """chroma_shot_check.py -- score a rig screenshot of a PAUSED picture against ffmpeg's decode of the
-same picture, rendered with the reader's chroma (docs/display.md S12: interpolated) and with the old
-nearest rule, so a run says which one the silicon does.
+same picture, rendered with each chroma rule the reader has had (docs/display.md S12 / S13), so a
+run says which one the silicon does.
 
     tools/chroma_shot_check.py IMAGE.iso SHOT.png SH_PTS [field]
 
@@ -9,9 +9,9 @@ SHOT.png: `mister.py seq "...; key play/pause; wait 3; shot NAME"` -- the RAW 72
 whose HDMI output is 720x480 (video_mode=2) ascal shrinks a 16:9 picture to 720x405 on its INPUT side
 and the shot is not the raster (docs/hil_harness.md "Facts that bite"). SH_PTS: telemetry's shown
 picture (sh_pts_hi << 16 | sh_pts_lo) at the shot; it locates the clip and the window, and the picture
-itself is picked by the luma of each field (model-independent). `field`: a field store (each field's
-chroma interpolated along the line only), else a frame (both ways). The pause glyph is excluded (a box
-at the bottom left) and reported as such."""
+itself is picked by the luma of each field (model-independent). `field`: a field store in Weave --
+its rules S13's field step (Figure E-1's siting), S12's along the line only, and nearest -- else a
+frame: S12's both ways, and nearest. The pause glyph is excluded (a box at the bottom left)."""
 import sys, os, subprocess, tempfile, re
 import numpy as np
 from PIL import Image
@@ -37,6 +37,16 @@ def up_ident(c):
         ra = k + 1 if k == 0 else k - 1; rd = k - 1 if k == H - 1 else k + 1
         o = ra if (k & 1) == 0 else rd
         rows.append((3 * h[k >> 1] + h[o >> 1] + 2) >> 2)
+    return np.stack(rows)
+
+def up_fv(c, p):
+    """(S13) one field's chroma (p: 0 top, 1 bottom) at Figure E-1's field siting: the line nearer its
+    row (k & 1 == p) (7 h[m] + h[n] + 4) >> 3, the other (5 h[m] + 3 h[n] + 4) >> 3, n the far-side row"""
+    h = hup(c); R = c.shape[0]; rows = []
+    for k in range(2 * R):
+        m = k >> 1
+        n = max(m - 1, 0) if (k & 1) == 0 else min(m + 1, R - 1)
+        rows.append((7 * h[m] + h[n] + 4) >> 3 if (k & 1) == p else (5 * h[m] + 3 * h[n] + 4) >> 3)
     return np.stack(rows)
 
 def first_vpts(mm, a, b):
@@ -104,29 +114,24 @@ def main():
     print("pts %d -> clip %05d, %d pictures decoded; top field from #%d (luma err %.2f), bottom from #%d (%.2f)" % (pts, c, n, i0, e0, i1, e1))
     if not field:
         Yf, Uf, Vf = frame(raw, i0)
-        new = rgb(Yf, up_ident(Uf), up_ident(Vf)); old = rgb(Yf, up(Uf), up(Vf))
+        models = [("S12 both ways", rgb(Yf, up_ident(Uf), up_ident(Vf))), ("nearest", rgb(Yf, up(Uf), up(Vf)))]
     else:
-        pn = [np.zeros((480, 720), np.int64) for _ in range(3)]; po = [np.zeros((480, 720), np.int64) for _ in range(3)]
-        for p, i in ((0, i0), (1, i1)):
-            Yf, Uf, Vf = frame(raw, i)
-            pn[0][p::2] = po[0][p::2] = Yf[p::2]
-            pn[1][p::2], pn[2][p::2] = up_h(Uf[p::2]), up_h(Vf[p::2])
-            po[1][p::2], po[2][p::2] = up(Uf[p::2]), up(Vf[p::2])
-        new = rgb(*pn); old = rgb(*po)
-    dn = np.abs(shot.astype(np.int64) - new).max(-1); do = np.abs(shot.astype(np.int64) - old).max(-1)
-    hud = (dn > 24) & (do > 24)          # the pause glyph: neither model explains it; excluded from both alike
-    mask = ~hud
-    if hud.any():
-        yy, xx = np.nonzero(hud)
-        print("  excluded: %d pixels neither model explains, rows %d..%d cols %d..%d" % (hud.sum(), yy.min(), yy.max(), xx.min(), xx.max()))
+        rules = [("S13 field step", lambda c, p: up_fv(c, p)), ("S12 along the line", lambda c, p: up_h(c)),
+                 ("nearest", lambda c, p: up(c))]
+        models = []
+        for nm, f in rules:
+            pl = [np.zeros((480, 720), np.int64) for _ in range(3)]
+            for p, i in ((0, i0), (1, i1)):
+                Yf, Uf, Vf = frame(raw, i)
+                pl[0][p::2], pl[1][p::2], pl[2][p::2] = Yf[p::2], f(Uf[p::2], p), f(Vf[p::2], p)
+            models.append((nm, rgb(*pl)))
+    shot = shot.astype(np.int64)
     box = np.zeros((480, 720), bool); box[436:461, 12:33] = True     # the pause glyph's box (rows 440..456, cols 16..28 + 4)
-    for nm, w in (("new", new), ("old", old)):
-        d = np.abs(shot.astype(np.int64) - w).max(-1)
+    for nm, w in models:
+        d = np.abs(shot - w).max(-1)
         bad = (d > 0) & ~box
-        print("  %s: %d pixels differ outside the glyph box (of %d)%s" % (nm, bad.sum(), (~box).sum(),
-              "" if not bad.any() else ", max %d" % d[bad].max()))
-    for nm, w in (("interpolated (new)", new), ("nearest (old)", old)):
-        e, e2, mx, mean = score(shot, w, mask)
-        print("  %-19s exact %6.2f %%  <= 2: %6.2f %%  max %3d  mean %.3f" % (nm, e, e2, mx, mean))
+        print("  %-20s %6d pixels differ outside the glyph box (of %d)%s; exact %6.2f %%" % (
+            nm, bad.sum(), (~box).sum(), "" if not bad.any() else ", max %d" % d[bad].max(),
+            100.0 * (d[~box] == 0).mean()))
 
 main()
