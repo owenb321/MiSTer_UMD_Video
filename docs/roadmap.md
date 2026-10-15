@@ -48,7 +48,7 @@
 
 ## Where the work stands (2026-10-11) -- start here in a new session
 
-- **Going public on GitHub (decided 2026-10-11, the maintainer): steps 1-3 ✅, step 4 (the first release) next** (`CLAUDE.md` "Source
+- **Going public on GitHub (decided 2026-10-11, the maintainer): ✅ DONE -- public with v0.1.0 (2026-10-15)** (`CLAUDE.md` "Source
   control"). A fresh history, as MiSTer_DVD and MiSTer_h264_decoder did: every Forgejo commit carries a
   personal e-mail address, so none is pushed; the tree's files were audited clean (no paths, hosts or
   addresses in any version of any file).
@@ -60,8 +60,12 @@
      expose my email").
   3. ✅ (2026-10-11, `ea7659e`) The import: one commit of Forgejo `main`'s tree under `owenb321@users.noreply.github.com` (this
      repository's `user.email`), pushed as GitHub `main`; `origin` -> GitHub, Forgejo kept as `forgejo`.
-  4. The first release (the `release` skill): the one release commit, the timing-clean `.rbf` and the UMD
-     Main from it, `publish_draft.sh`, CI's zip, the smoke test; public with it.
+  4. ✅ The first release, **v0.1.0** (2026-10-15): the release commit `2dfb9e1` (`9cfd145` + the install text's
+     fix, both artefacts rebuilt bit-identical), smoke-tested on .201, the draft from `publish_draft.sh`, CI's zip;
+     the maintainer made the repository public and set Pages to GitHub Actions, then the release was published
+     (`docs/history.md` §2). Pages' first deploy was refused by the `github-pages` environment (GitHub allows
+     only `main` by default; `docs.yml` deploys from the release TAG): `v*` tags and `docs-v*` branches added
+     to its deployment policies, the deploy re-run, the manual live.
 
 - **The resume point (Forgejo fj#88 / fj#89, 2026-10-11): ✅ MERGED (PR fj#91), ✅ HW-CONFIRMED** (`docs/resume.md` §7,
   `p9.md` M4n; the UMD Main only). The quit keeps the point before the disc script's `onExit`, the OSD Reset's
