@@ -648,8 +648,8 @@ Publishing: the `release` skill -- a GitHub release draft (`tools/publish_draft.
 
 ## Source control
 
-**Hosting: GitHub** (`github.com/owenb321/MiSTer_UMD_Video`; private while it is staged, public
-with the first release). The Forgejo repository holds the bring-up history (PRs fj#1 to fj#93,
+**Hosting: GitHub** (`github.com/owenb321/MiSTer_UMD_Video`; **public since v0.1.0, 2026-10-15**;
+the manual at `owenb321.github.io/MiSTer_UMD_Video`). The Forgejo repository holds the bring-up history (PRs fj#1 to fj#93,
 issues to fj#89) and is not imported. Write everything as if it were public already (below).
 
 - **Never commit directly to `main`.** Branch first (`feature/<slug>`, `fix/<slug>`).

@@ -66,7 +66,9 @@ the number against the WHOLE unreleased delta (patch / minor / major per `CLAUDE
      the draft's zip, then
      `gh release edit v<semver> --draft=false`. Publishing deploys the manual
      (`docs.yml`). A later doc fix deploys from a `docs-v<semver>` branch cut off the tag,
-     never from `main`.
+     never from `main`. The `github-pages` environment must allow both: its deployment policies
+     carry `v*` (tags) and `docs-v*` (branches) beside `main` (set 2026-10-15, when v0.1.0's
+     first deploy was refused: `gh api repos/<repo>/environments/github-pages/deployment-branch-policies`).
 
 ⛔ No version-reset step after publishing. The next feature branch sets its own
 `dev-<slug>` in its first commit.
