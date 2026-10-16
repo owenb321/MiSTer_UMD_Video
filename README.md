@@ -17,6 +17,9 @@ the optional **UMD Main** (below) adds the features that run on the ARM.
 > remembered place per disc, and a real UMD played from a PSP over USB. The plan and its
 > history are in [`docs/roadmap.md`](docs/roadmap.md).
 
+📖 **[Read the manual](https://owenb321.github.io/MiSTer_UMD_Video/)** — install, controls, every setting,
+the disc menus, CRT output, playing a real UMD from a PSP, troubleshooting.
+
 Built as a sibling of [MiSTer_DVD](https://github.com/owenb321/MiSTer_DVD), from which it
 takes the framework edits, the build gates, the verification discipline and, as each
 phase needs it, the reusable plumbing (`docs/harvest.md`). Nothing of the DVD core's
@@ -55,14 +58,14 @@ Out of scope for the first version: PSP game cutscenes.
 
 Download `MiSTer_UMD_Video_<version>.zip` from the
 [latest release](https://github.com/owenb321/MiSTer_UMD_Video/releases/latest) and follow the
-[install page](site/content/getting-started/install.md): the zip goes to the SD card's root,
+[install page](https://owenb321.github.io/MiSTer_UMD_Video/getting-started/install/): the zip goes to the SD card's root,
 and two lines in `MiSTer.ini` turn on the UMD Main (the disc menus and the rest). To build it
 yourself, see below and `./tools/package_release.sh`.
 
 ## Documentation
 
-- **User manual** — source in [`site/content/`](site/content/), built with MkDocs;
-  published on release.
+- **[User manual](https://owenb321.github.io/MiSTer_UMD_Video/)** — published with each release;
+  its source is [`site/content/`](site/content/), built with MkDocs.
 - **[`docs/`](docs/)** — engineering design notes: the *why* behind the RTL. **Not a manual.**
 
 ## Building from source
